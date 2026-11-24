@@ -178,7 +178,7 @@ pub fn run(mut args: Vec<String>) {
 
     let title_id = system.title.as_ref().map_or(0, |title| title.program_id());
     let title = if profile.name.is_empty() { format!("{title_id:016X}") } else { profile.name.clone() };
-    log::info!("Pocket Native {}, {title}, {} options", env!("CARGO_PKG_VERSION"), profile.options.len());
+    log::info!("Almond Native {}, {title}, {} options", env!("CARGO_PKG_VERSION"), profile.options.len());
     let base_drops = std::env::var("ZAKURO_DROP_DRAWS").unwrap_or_default();
     apply_options(&mut system, &game, &profile, &base_drops);
     let mut probe = probing.then(|| probe::Probe::new(title_id, args.get(1).and_then(|frames| frames.parse().ok()).unwrap_or(3600)));

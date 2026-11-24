@@ -1,7 +1,7 @@
 #!/bin/bash
-# build.sh [--out dir] [--test]: builds Pocket Native's Android app,
-# pocket-native.apk in the output directory (build/ by default), inside a
-# container (podman or docker). --test makes io.github.pocketnative.test,
+# build.sh [--out dir] [--test]: builds Almond Native's Android app,
+# almond-native.apk in the output directory (build/ by default), inside a
+# container (podman or docker). --test makes io.github.almondnative.test,
 # signed with a test key, which installs beside the real app. The real app is
 # signed with the keystore in KEYSTORE (its password in KEYSTORE_PASS), kept
 # by whoever releases it.
@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 engine=$(command -v podman || command -v docker) || { echo "the build needs podman or docker"; exit 1; }
-image=pocket-native-android:$(sha256sum "$repo/scripts/android/Containerfile" | cut -c1-12)
+image=almond-native-android:$(sha256sum "$repo/scripts/android/Containerfile" | cut -c1-12)
 if ! "$engine" image inspect "$image" >/dev/null 2>&1; then
     echo "== making the Android build container, once (the NDK is about 1 GB)"
     "$engine" build -f "$repo/scripts/android/Containerfile" -t "$image" "$repo/scripts/android"
@@ -28,11 +28,11 @@ user=(--user "$(id -u):$(id -g)")
 [ "$(basename "$engine")" = podman ] && user=(--userns=keep-id)
 mounts=(-v "$repo:/src:ro" -v "$out/.work-android:/work" -v "$out:/out")
 if [ $test = 1 ]; then
-    args=(/out/pocket-native-test.apk /work/test.keystore io.github.pocketnative.test)
+    args=(/out/almond-native-test.apk /work/test.keystore io.github.almondnative.test)
 else
     [ -n "${KEYSTORE:-}" ] && [ -f "$KEYSTORE" ] || { echo "KEYSTORE names the release keystore; --test builds without it"; exit 2; }
     mounts+=(-v "$(dirname "$(realpath "$KEYSTORE")"):/keys")
-    args=(/out/pocket-native.apk "/keys/$(basename "$KEYSTORE")")
+    args=(/out/almond-native.apk "/keys/$(basename "$KEYSTORE")")
 fi
 "$engine" run --rm "${user[@]}" "${mounts[@]}" -e CARGO_HOME=/work/cargo -e CARGO_TARGET_DIR=/work/target -e HOME=/work \
     -e KEYSTORE_PASS="${KEYSTORE_PASS:-android}" "$image" bash /src/scripts/android/inside.sh "${args[@]}"

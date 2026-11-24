@@ -553,7 +553,7 @@ impl Menu {
         canvas.fill([x0 + 2.0, y0 + 2.0, x1 - 2.0, y0 + 30.0], rgba(HEADER, 255));
         canvas.outline([x0, y0, x1, y1], 2.0, rgba(EDGE, 255));
         let (heading, state) = match self.page {
-            Page::Main => ("Pocket Native", "Paused"),
+            Page::Main => ("Almond Native", "Paused"),
             Page::Advanced => ("Advanced", "This game"),
             Page::Buttons => ("Buttons", "This game"),
         };

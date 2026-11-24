@@ -12,13 +12,13 @@
 #   log <game> [pattern]     the game's log, or its lines matching pattern
 #   shaders <game>           what building shaders cost in its last run
 #
-# --test looks at Pocket Native (test), io.github.pocketnative.test, rather
+# --test looks at Almond Native (test), io.github.almondnative.test, rather
 # than the app itself.
 set -euo pipefail
 
-package=io.github.pocketnative
+package=io.github.almondnative
 if [ "${1:-}" = --test ]; then
-    package=io.github.pocketnative.test
+    package=io.github.almondnative.test
     shift
 fi
 what="${1:-}"
@@ -100,7 +100,7 @@ case "$what" in
         else
             echo "== could not empty the system's shader cache, the run may be quicker than a real first one"
         fi
-        echo "== start the game in the app, play, quit with L3 + Start, then: $0 $([ $package = io.github.pocketnative ] || echo '--test ')shaders \"$1\""
+        echo "== start the game in the app, play, quit with L3 + Start, then: $0 $([ $package = io.github.almondnative ] || echo '--test ')shaders \"$1\""
         ;;
     log)
         folder=$(find_game "${1:?which game}")

@@ -1,4 +1,4 @@
-package io.github.pocketnative;
+package io.github.almondnative;
 
 import android.app.Activity;
 import android.app.Presentation;
@@ -48,7 +48,7 @@ public final class SecondScreen implements SurfaceHolder.Callback, View.OnTouchL
             return false;
         }
         final Display target = other;
-        Log.i("PocketNative", "second screen on display " + target.getDisplayId() + ", " + target.getName());
+        Log.i("AlmondNative", "second screen on display " + target.getDisplayId() + ", " + target.getName());
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -73,7 +73,7 @@ public final class SecondScreen implements SurfaceHolder.Callback, View.OnTouchL
                     presentation.show();
                     shown = presentation;
                 } catch (WindowManager.InvalidDisplayException error) {
-                    Log.w("PocketNative", "could not show the second screen", error);
+                    Log.w("AlmondNative", "could not show the second screen", error);
                 }
             }
         });

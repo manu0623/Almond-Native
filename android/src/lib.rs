@@ -1,4 +1,4 @@
-//! Pocket Native's game on Android: the NativeActivity the launcher starts
+//! Almond Native's game on Android: the NativeActivity the launcher starts
 //! in a process of its own for one game, whose window the screens go to and
 //! whose key and motion events become the pad's buttons, sticks and touch.
 //! Quitting ends the process, which leaves the launcher showing again.
@@ -38,7 +38,7 @@ const TOUCHSCREEN: u32 = 0x0000_1002;
 
 #[no_mangle]
 fn android_main(app: AndroidApp) {
-    let own = app.internal_data_path().unwrap_or_else(|| PathBuf::from("/data/local/tmp/pocket-native"));
+    let own = app.internal_data_path().unwrap_or_else(|| PathBuf::from("/data/local/tmp/almond-native"));
     let folder = match game_extra(&app) {
         Ok(Some(folder)) => PathBuf::from(folder),
         // started without a game, from a shortcut to this activity
@@ -380,7 +380,7 @@ fn show_second_screen(app: &AndroidApp) -> Result<bool, String> {
         // the app's own classes come from the activity's class loader, not the
         // one a thread attached from native code has
         let loader = env.call_method(&activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?.l()?;
-        let name = env.new_string("io.github.pocketnative.SecondScreen")?;
+        let name = env.new_string("io.github.almondnative.SecondScreen")?;
         let class: JClass = env.call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[JValue::Object(&name)])?.l()?.into();
         let methods = [
             NativeMethod { name: "surfaceReady".into(), sig: "(Landroid/view/Surface;)V".into(), fn_ptr: surface_ready as *mut c_void },

@@ -1,32 +1,34 @@
-<p align="center"><img src="assets/logo/pocket-native.png" alt="" width="200"></p>
+<p align="center"><img src="assets/logo/almond-native.png" alt="" width="200"></p>
 
-# Pocket Native
+# Almond Native
 
-Nintendo 3DS games on cheap handhelds and Android, rebuilt for them
-instead of emulated.
+Nintendo 3DS games on Android, rebuilt for the phone instead of emulated.
 
-**[Start here](START_HERE.md)** to play · [Which games work](docs/compatibility.md) ·
-[Handhelds](#handhelds) · [Systems](#systems) ·
-[Latest release](https://github.com/whovian64/pocket-native/releases/latest)
+Almond Native is [Pocket Native](https://github.com/whovian64/pocket-native)
+with the Android app made its own: the same engine, recompiler and per-game
+profiles, packaged as `io.github.almondnative` so that it installs beside
+Pocket Native instead of over it. Pocket Native is a fork of
+[Zakuro](https://github.com/fearkov/zakuro) and
+[3dsrecomp](https://github.com/fearkov/3dsrecomp), both by fearkov.
 
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/fZ7Q9hmWCd)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/whovian64)
+## Building the app
 
-## Now on ROCKNIX, and on muOS
+The Android app is built in a container, Docker or Podman, which brings the
+NDK, the SDK's build tools and Rust's Android target:
 
-From 0.5.0 Pocket Native runs under ROCKNIX, the RG DS on both of its
-screens included. muOS on the H700 handhelds works too: testers have
-played Super Mario 3D Land at about full speed there, Smash, A Link
-Between Worlds, both Project X Zones and more. See [Systems](#systems).
+```shell
+# a test build, io.github.almondnative.test, signed with a test key, which
+# installs beside the real app
+scripts/android/build.sh --test
 
-## Now on Android
+# the real app, build/almond-native.apk, signed with your own keystore,
+# which make_apk.sh makes the first time
+KEYSTORE=~/keys/almond-native.keystore scripts/android/build.sh
+```
 
-Pocket Native now runs on Android too, on one screen or two, thanks to
-[gopnikcosmoslav2077](https://github.com/gopnikcosmoslav2077), who
-brought up the Android port almost single-handedly
-([#8](https://github.com/whovian64/pocket-native/pull/8)). It's been
-tested on Samsung and Google phones, the AYN Thor and Anbernic's RG DS
-running Android. Your PC still builds the games and the app plays them.
+`scripts/android/device.sh` looks at the games in the app on a handheld over
+adb: `games`, `log`, `shaders`, `env`. Point `Launcher.RELEASES` at your own
+repository before publishing releases, so that Update fetches Almond Native.
 
 ## How it works
 

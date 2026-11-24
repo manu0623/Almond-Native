@@ -224,7 +224,7 @@ all games` (`Rebuild all games.bat` on Windows), and the build makes those
 parts run at full speed too. Copy the folder onto the card again after.
 
 On Android the app keeps `title.hints` in the game's own folder,
-`Android/data/io.github.pocketnative/files/games/<title id>/` on the card (or
+`Android/data/io.github.almondnative/files/games/<title id>/` on the card (or
 on the phone's storage without one). Copy it into the same game's folder in
 the kit, `build/Pocket Native/pocket-native/games/<title id>/`, then
 `Rebuild all games` and add the rebuilt game in the app again: its saves,
@@ -344,7 +344,7 @@ and attach the game's `log.txt`:
 
 - **Linux handheld:** `Pocket Native/pocket-native/games/<title id>/data/log.txt`
   on the card
-- **Android:** `Android/data/io.github.pocketnative/files/games/<title id>/data/log.txt`.
+- **Android:** `Android/data/io.github.almondnative/files/games/<title id>/data/log.txt`.
   Plug the device into a PC to get at it, many file managers can't
   open `Android/data`.
 

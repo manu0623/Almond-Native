@@ -1,7 +1,7 @@
 #!/bin/bash
-# make_apk.sh <package> <label> <libpocketnative.so> <assets dir> <out.apk> <keystore>
+# make_apk.sh <package> <label> <libalmondnative.so> <assets dir> <out.apk> <keystore> [jni dir]
 #
-# Packages Pocket Native's app with the SDK's build tools, no Gradle: the
+# Packages Almond Native's app with the SDK's build tools, no Gradle: the
 # manifest linked against the platform with the profiles as assets, the
 # launcher's and the game's Java classes as classes.dex, the engine in
 # lib/arm64-v8a, aligned and signed with the keystore, which is made the
@@ -21,7 +21,14 @@ code=$((major * 1000000 + minor * 1000 + patch))
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 escaped=$(printf %s "$label" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+# a test build (a package ending in .test) is debuggable: adb run-as and its
+# files are how a build on the device is looked at
+case "$package" in
+    *.test) debuggable=true ;;
+    *) debuggable=false ;;
+esac
 sed -e "s|@PACKAGE@|$package|" -e "s|@VERSION_CODE@|$code|" -e "s|@VERSION@|$version|" \
+    -e "s|@DEBUGGABLE@|$debuggable|" \
     -e "s|@LABEL@|$(printf %s "$escaped" | sed 's/[|&\\]/\\&/g')|" \
     "$here/AndroidManifest.xml" > "$work/AndroidManifest.xml"
 
@@ -34,7 +41,11 @@ mapfile -t classes < <(find "$work/classes" -name '*.class')
 "$BUILD_TOOLS_BIN/d8" --min-api 30 --lib "$ANDROID_JAR" --output "$work/dex" "${classes[@]}"
 (cd "$work/dex" && zip -q "$work/unaligned.apk" classes.dex)
 mkdir -p "$work/lib/arm64-v8a"
-cp "$engine" "$work/lib/arm64-v8a/libpocketnative.so"
+cp "$engine" "$work/lib/arm64-v8a/libalmondnative.so"
+# and whatever else the app carries for its own CPU, as it is named there
+if [ -n "${7:-}" ] && [ -d "$7" ]; then
+    cp "$7"/* "$work/lib/arm64-v8a/"
+fi
 # stored, not compressed, and page-aligned by zipalign -p, so that Android
 # loads it from the APK itself rather than unpacking a second copy
 (cd "$work" && zip -q -r -0 unaligned.apk lib)
@@ -42,8 +53,8 @@ cp "$engine" "$work/lib/arm64-v8a/libpocketnative.so"
 
 if [ ! -f "$keystore" ]; then
     echo "== making a signing key, $keystore"
-    keytool -genkeypair -keystore "$keystore" -storepass "$pass" -keypass "$pass" -alias pocketnative \
-        -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=Pocket Native" >/dev/null 2>&1
+    keytool -genkeypair -keystore "$keystore" -storepass "$pass" -keypass "$pass" -alias almondnative \
+        -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=Almond Native" >/dev/null 2>&1
 fi
-"$BUILD_TOOLS_BIN/apksigner" sign --ks "$keystore" --ks-pass "pass:$pass" --ks-key-alias pocketnative --out "$out" "$work/aligned.apk"
+"$BUILD_TOOLS_BIN/apksigner" sign --ks "$keystore" --ks-pass "pass:$pass" --ks-key-alias almondnative --out "$out" "$work/aligned.apk"
 rm -f "$out.idsig"

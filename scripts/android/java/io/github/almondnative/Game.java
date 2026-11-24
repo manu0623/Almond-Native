@@ -1,4 +1,4 @@
-package io.github.pocketnative;
+package io.github.almondnative;
 
 import android.app.NativeActivity;
 import android.content.Intent;
@@ -15,7 +15,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A game, in a process of its own: the NativeActivity libpocketnative.so runs,
+ * A game, in a process of its own: the NativeActivity libalmondnative.so runs,
  * full screen and in the orientation the launcher asks for. The game's folder
  * comes in the "game" extra, which android_main reads.
  */
@@ -71,7 +71,7 @@ public final class Game extends NativeActivity {
                 // Reset: the launcher starts the game again once this
                 // process has ended
                 if (code == 3) {
-                    startActivity(new Intent("io.github.pocketnative.PLAY").setClass(Game.this, Launcher.class)
+                    startActivity(new Intent("io.github.almondnative.PLAY").setClass(Game.this, Launcher.class)
                             .putExtra("game", getIntent().getStringExtra("game")).putExtra("again", true));
                 }
                 finish();

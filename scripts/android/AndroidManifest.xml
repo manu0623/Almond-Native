@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pocket Native on Android: the launcher, a plain activity of its own,
-     and the game, a NativeActivity that loads libpocketnative.so in a
+<!-- Almond Native on Android: the launcher, a plain activity of its own,
+     and the game, a NativeActivity that loads libalmondnative.so in a
      process of its own, so that quitting a game ends it. make_apk.sh fills
      in the package, version and label. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -16,17 +16,22 @@
     <!-- Update: the latest release from GitHub, installed after asking -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Build: a game compiled on the device, in a foreground service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="@LABEL@"
+        android:debuggable="@DEBUGGABLE@"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
-        android:extractNativeLibs="false"
+        android:extractNativeLibs="true"
         android:isGame="true"
         android:appCategory="game"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
-            android:name="io.github.pocketnative.Launcher"
+            android:name="io.github.almondnative.Launcher"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation">
@@ -36,14 +41,20 @@
             </intent-filter>
         </activity>
         <activity
-            android:name="io.github.pocketnative.Game"
+            android:name="io.github.almondnative.Game"
             android:exported="false"
             android:process=":game"
             android:taskAffinity="@PACKAGE@.game"
             android:resizeableActivity="false"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
-            <meta-data android:name="android.app.lib_name" android:value="pocketnative" />
+            <meta-data android:name="android.app.lib_name" android:value="almondnative" />
         </activity>
+        <!-- builds a game on the device: the recompiler and the compiler it
+             carries, in a process that may outlive the launcher -->
+        <service
+            android:name="io.github.almondnative.BuildService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

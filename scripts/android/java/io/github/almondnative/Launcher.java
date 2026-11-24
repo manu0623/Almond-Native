@@ -1,4 +1,4 @@
-package io.github.pocketnative;
+package io.github.almondnative;
 
 import android.app.Activity;
 import android.app.ActivityManager;
@@ -23,6 +23,8 @@ import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.util.TypedValue;
 import android.view.Display;
@@ -58,7 +60,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Pocket Native's launcher: the games added to it, Add game for one the PC kit
+ * Almond Native's launcher: the games added to it, Add game for one the PC kit
  * built (its folder, or a pack file), Device for how games show, and Update
  * for a newer release from GitHub. A game plays in Game, in a process of its
  * own.
@@ -74,9 +76,14 @@ public final class Launcher extends Activity {
     private static final int BLUE = 0xFF2F6FE0;
     private static final int ADD_FOLDER = 1;
     private static final int ADD_PACK = 2;
+    private static final int ADD_BUILD = 3;
     /** a shortcut's intent: the game in the "game" extra, played at once. */
-    private static final String PLAY_GAME = "io.github.pocketnative.PLAY";
-    private static final String RELEASES = "https://api.github.com/repos/whovian64/pocket-native/releases/latest";
+    private static final String PLAY_GAME = "io.github.almondnative.PLAY";
+    /**
+     * the GitHub repository this app updates itself from: set it to your
+     * own fork when you publish releases there.
+     */
+    private static final String RELEASES = "https://api.github.com/repos/CHANGE-ME/almond-native/releases/latest";
 
     private final List<File> games = new ArrayList<>();
     private GameList list;
@@ -115,7 +122,7 @@ public final class Launcher extends Activity {
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         empty = new TextView(this);
-        empty.setText("No games yet. Build a game with Pocket Native's kit on a PC, copy its folder or pack file here, then Add game.");
+        empty.setText("No games yet. Build a game with Almond Native's kit on a PC, copy its folder or pack file here, then Add game.");
         empty.setTextColor(0xFFBBBBBB);
         empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         empty.setPadding(dp(16), dp(24), dp(16), dp(16));
@@ -136,6 +143,20 @@ public final class Launcher extends Activity {
         setContentView(root);
         refresh();
         playShortcut(getIntent());
+        buildShortcut(getIntent());
+    }
+
+    /**
+     * a build asked for from outside the launcher, its file in the "build"
+     * extra: how a build is started over adb while it is being brought up,
+     * and by the tests.
+     */
+    private void buildShortcut(Intent intent) {
+        String file = intent.getStringExtra("build");
+        if (file != null) {
+            setIntent(new Intent());
+            build(Uri.parse(file));
+        }
     }
 
     /** a game from a shortcut on the home screen, its folder in the extra. */
@@ -416,14 +437,14 @@ public final class Launcher extends Activity {
     private void addGame() {
         new AlertDialog.Builder(this)
                 .setTitle("Add game")
-                .setItems(new String[] {"A folder the kit built", "A pack file"}, (dialog, which) -> {
+                .setItems(new String[] {"A folder the kit built", "A pack file", "Build it on this device"}, (dialog, which) -> {
                     if (which == 0) {
                         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), ADD_FOLDER);
                     } else {
                         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                         pick.addCategory(Intent.CATEGORY_OPENABLE);
                         pick.setType("*/*");
-                        startActivityForResult(pick, ADD_PACK);
+                        startActivityForResult(pick, which == 1 ? ADD_PACK : ADD_BUILD);
                     }
                 })
                 .show();
@@ -440,7 +461,52 @@ public final class Launcher extends Activity {
             inBackground("Adding", progress -> withCleanUp(() -> added(importFolder(uri, progress))));
         } else if (request == ADD_PACK) {
             inBackground("Adding", progress -> withCleanUp(() -> added(importPack(uri, progress))));
+        } else if (request == ADD_BUILD) {
+            build(uri);
         }
+    }
+
+    /**
+     * a game built here: BuildService does the work in a service of its own,
+     * the dialog here showing what it is on until it is done.
+     */
+    private void build(Uri uri) {
+        BuildService.result = null;
+        BuildService.stage = "starting";
+        BuildService.percent = 0;
+        Intent service = new Intent(this, BuildService.class)
+                .setAction(BuildService.ACTION_BUILD)
+                .putExtra(BuildService.EXTRA_GAME, uri.toString());
+        startForegroundService(service);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(16), dp(24), dp(8));
+        TextView label = new TextView(this);
+        label.setText("Starting...");
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        box.addView(label);
+        box.addView(bar);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Building").setView(box).setCancelable(false).show();
+        Handler poll = new Handler(Looper.getMainLooper());
+        Runnable look = new Runnable() {
+            @Override
+            public void run() {
+                if (dialog.isShowing() && !"done".equals(BuildService.stage)) {
+                    label.setText(BuildService.stage);
+                    bar.setProgress(BuildService.percent);
+                    poll.postDelayed(this, 400);
+                    return;
+                }
+                if (dialog.isShowing()) {
+                    dialog.dismiss();
+                }
+                String said = BuildService.result;
+                Toast.makeText(Launcher.this, said == null ? "Done" : said, Toast.LENGTH_LONG).show();
+                refresh();
+            }
+        };
+        poll.postDelayed(look, 400);
     }
 
     private interface Progress {
@@ -898,7 +964,7 @@ public final class Launcher extends Activity {
                     }
                 }));
         TextView note = new TextView(this);
-        note.setText("Changes take effect the next time a game starts. More settings are in the menu in game, the Menu button or Back, where Edit touch controls moves and sizes them.\n\nPocket Native " + version());
+        note.setText("Changes take effect the next time a game starts. More settings are in the menu in game, the Menu button or Back, where Edit touch controls moves and sizes them.\n\nAlmond Native " + version());
         note.setTextColor(0xFF777777);
         note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         note.setPadding(dp(16), dp(20), dp(16), 0);
@@ -1083,13 +1149,13 @@ public final class Launcher extends Activity {
                     }
                 }
                 if (!newer(latest, version())) {
-                    message = "Pocket Native " + version() + " is the latest";
+                    message = "Almond Native " + version() + " is the latest";
                 } else if (apk == null) {
-                    message = "Pocket Native " + latest + " is out, but has no Android app yet";
+                    message = "Almond Native " + latest + " is out, but has no Android app yet";
                 } else {
                     String url = apk;
                     runOnUiThread(() -> new AlertDialog.Builder(this)
-                            .setTitle("Pocket Native " + latest)
+                            .setTitle("Almond Native " + latest)
                             .setMessage("Download and install it? Your games and saves stay.")
                             .setPositiveButton("Update", (dialog, which) -> download(url))
                             .setNegativeButton("Not now", null)
@@ -1115,7 +1181,7 @@ public final class Launcher extends Activity {
             PackageInstaller installer = getPackageManager().getPackageInstaller();
             int id = installer.createSession(new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL));
             try (PackageInstaller.Session session = installer.openSession(id)) {
-                try (OutputStream out = session.openWrite("pocket-native.apk", 0, apk.length()); InputStream in = new FileInputStream(apk)) {
+                try (OutputStream out = session.openWrite("almond-native.apk", 0, apk.length()); InputStream in = new FileInputStream(apk)) {
                     byte[] buffer = new byte[1 << 20];
                     int read;
                     while ((read = in.read(buffer)) > 0) {
@@ -1135,6 +1201,8 @@ public final class Launcher extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         playShortcut(intent);
+        // a build asked for while the launcher is already up
+        buildShortcut(intent);
         // the installer asks the person first, through the intent it sends back
         if ("installed".equals(intent.getAction())
                 && intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0) == PackageInstaller.STATUS_PENDING_USER_ACTION) {
