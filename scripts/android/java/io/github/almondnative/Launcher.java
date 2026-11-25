@@ -203,7 +203,7 @@ public final class Launcher extends Activity {
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         empty = new TextView(this);
-        empty.setText("No games built yet.\n\nAdd one Almond Native's kit built on a PC, or build it on this device: every title the app knows is under Not built.");
+        empty.setText("No games built yet.\n\nAdd one Almond Native's kit built on a PC, or build it on this device: every title the app knows is under Build needed and Not here.");
         empty.setTextColor(DIM);
         empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         empty.setLineSpacing(dp(2), 1f);
@@ -219,7 +219,7 @@ public final class Launcher extends Activity {
         LinearLayout filters = new LinearLayout(this);
         filters.setOrientation(LinearLayout.HORIZONTAL);
         filters.setPadding(dp(12), dp(4), dp(12), dp(2));
-        for (String key : new String[] {"all", "ready", "notbuilt"}) {
+        for (String key : new String[] {"all", "ready", "build", "missing"}) {
             Button chip = button("", v -> {
                 filter = key;
                 refresh();
@@ -390,11 +390,17 @@ public final class Launcher extends Activity {
         LinearLayout badges = new LinearLayout(this);
         badges.setOrientation(LinearLayout.HORIZONTAL);
         badges.addView(badge(game.id, 0xFF1A2230, DIM));
-        badges.addView(badge(game.ready ? "Ready" : "Not built", game.ready ? 0xFF14251C : 0xFF2A2113, game.ready ? 0xFF8BD5A0 : 0xFFFFC45A));
+        Where place = where(game);
+        badges.addView(badge(place == Where.READY ? "Ready" : place == Where.BUILD ? "Build needed" : "Not here",
+                place == Where.READY ? 0xFF14251C : place == Where.BUILD ? 0xFF2A2113 : 0xFF1B2534,
+                place == Where.READY ? 0xFF8BD5A0 : place == Where.BUILD ? 0xFFFFC45A : 0xFFA9B7C9));
         left.addView(badges);
 
         TextView played = new TextView(this);
-        played.setText(game.folder == null ? "Not on this device yet" : said(game.folder));
+        String dump = game.dump == null ? null : dumpName(game.dump);
+        played.setText(game.ready ? said(game.folder)
+                : dump != null ? "Dump: " + dump
+                : game.folder != null ? "Its dump is in its folder" : "Not on this device yet");
         played.setTextColor(DIM);
         played.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         played.setPadding(0, dp(6), 0, dp(8));
@@ -1018,25 +1024,40 @@ public final class Launcher extends Activity {
             }
         }
         known.addAll(byName.values());
-        Collections.sort(known, (a, b) -> a.name.compareToIgnoreCase(b.name));
+        Collections.sort(known, (a, b) -> {
+            // the ones with a dump on the device ahead of the rest
+            Where was = where(a), is = where(b);
+            if (was != is) {
+                return was == Where.BUILD ? -1 : 1;
+            }
+            return a.name.compareToIgnoreCase(b.name);
+        });
         every.addAll(here);
         every.addAll(known);
         listed.clear();
         for (Entry game : every) {
-            if (("ready".equals(filter) && !game.ready) || ("notbuilt".equals(filter) && game.ready)) {
+            Where place = where(game);
+            if (("ready".equals(filter) && place != Where.READY)
+                    || ("build".equals(filter) && place != Where.BUILD)
+                    || ("missing".equals(filter) && place != Where.MISSING)) {
                 continue;
             }
             listed.add(game);
         }
-        int readyCount = 0;
+        int readyCount = 0, buildCount = 0;
         for (Entry game : every) {
-            if (game.ready) {
+            Where place = where(game);
+            if (place == Where.READY) {
                 readyCount++;
+            } else if (place == Where.BUILD) {
+                buildCount++;
             }
         }
-        String[] labels = {"All  ", "Ready  ", "Not built  "};
-        int[] counts = {every.size(), readyCount, every.size() - readyCount};
-        String[] keys = {"all", "ready", "notbuilt"};
+        // what is on the device first, then what its games folder holds a
+        // dump of, and the rest last
+        String[] labels = {"All  ", "Ready  ", "Build needed  ", "Not here  "};
+        int[] counts = {every.size(), readyCount, buildCount, every.size() - readyCount - buildCount};
+        String[] keys = {"all", "ready", "build", "missing"};
         for (int i = 0; i < chips.size(); i++) {
             chips.get(i).setText(labels[i] + counts[i]);
             chips.get(i).setSelected(keys[i].equals(filter));
@@ -1186,6 +1207,24 @@ public final class Launcher extends Activity {
         }
     }
 
+    /** where a game in the list stands: built and playable, a dump on the
+     * device to build, or nothing of it here yet. */
+    private enum Where { READY, BUILD, MISSING }
+
+    private static Where where(Entry game) {
+        if (game.ready) {
+            return Where.READY;
+        }
+        return game.folder != null || game.dump != null ? Where.BUILD : Where.MISSING;
+    }
+
+    /** a dump's own file name, from the document the games folder gave. */
+    private static String dumpName(Uri dump) {
+        String id = DocumentsContract.getDocumentId(dump);
+        int slash = id.lastIndexOf('/');
+        return slash < 0 ? id : id.substring(slash + 1);
+    }
+
     private final class GameList extends BaseAdapter {
         @Override
         public int getCount() {
@@ -1240,31 +1279,33 @@ public final class Launcher extends Activity {
             TextView under = new TextView(Launcher.this);
             under.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             under.setPadding(dp(16), dp(3), 0, 0);
-            if (game.ready) {
+            Where place = where(game);
+            if (place == Where.READY) {
                 text.setTextColor(TEXT);
                 under.setText(said(game.folder));
                 under.setTextColor(DIM);
-            } else if (game.folder != null) {
-                // nothing to play until its code is on this device again
-                text.setTextColor(0xFF9A9A9A);
-                under.setText("Not built on this device any more: build it again");
+            } else if (place == Where.BUILD) {
+                // its dump is here: one build away from playing
+                text.setTextColor(0xFFC3CDDA);
+                under.setText(game.dump != null ? "Its dump is on the device · build it here"
+                        : "Its code is gone · build it again here");
                 under.setTextColor(0xFFFFC45A);
             } else {
-                // a title the profiles know and nothing was built for yet
+                // a title the profiles know and the device has nothing of yet
                 text.setTextColor(0xFF9A9A9A);
-                under.setText(game.dump == null ? "Not built yet · build it on this device"
-                        : "Not built yet · its dump is in your games folder");
-                under.setTextColor(0xFFFFC45A);
+                under.setText("Not on this device · add its dump to your games folder");
+                under.setTextColor(0xFF7E8CA0);
             }
             column.addView(text);
             column.addView(under);
             row.addView(column, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            // whether it is ready to play, at the card's right
+            // where it stands, at the card's right: playable, one build
+            // away, or not on this device at all
             TextView state = new TextView(Launcher.this);
-            state.setText(game.ready ? "Ready" : "Not built");
-            state.setTextColor(game.ready ? 0xFF8BD5A0 : 0xFFFFC45A);
+            state.setText(place == Where.READY ? "Ready" : place == Where.BUILD ? "Build needed" : "Not here");
+            state.setTextColor(place == Where.READY ? 0xFF8BD5A0 : place == Where.BUILD ? 0xFFFFC45A : 0xFFA9B7C9);
             state.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-            state.setBackground(rounded(game.ready ? 0xFF14251C : 0xFF2A2113, dp(9)));
+            state.setBackground(rounded(place == Where.READY ? 0xFF14251C : place == Where.BUILD ? 0xFF2A2113 : 0xFF1B2534, dp(9)));
             state.setPadding(dp(10), dp(4), dp(10), dp(4));
             row.addView(state);
             holder.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -2016,7 +2057,7 @@ public final class Launcher extends Activity {
         TextView about = new TextView(this);
         about.setText(folder == null
                 ? "Not set. Pick the folder on this device your games are kept in: the .3ds dumps in it are listed to build here, and built games in it are added."
-                : gamesFolderName(folder) + "\nIts .3ds dumps are listed under Not built; Scan now finds the new ones.");
+                : gamesFolderName(folder) + "\nIts .3ds dumps are listed as Build needed; Scan now finds the new ones.");
         about.setTextColor(DIM);
         about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         about.setLineSpacing(dp(2), 1f);
