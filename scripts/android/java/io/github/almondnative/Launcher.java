@@ -24,6 +24,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.Icon;
 import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.StateListDrawable;
@@ -65,8 +66,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -185,11 +188,17 @@ public final class Launcher extends Activity {
         page.setOrientation(LinearLayout.VERTICAL);
         gamesPage = page;
         body.addView(page);
+        // the pages scroll, and the pad walks the cards inside them: the
+        // scroll views themselves take no focus, their content does
         devicePage = new ScrollView(this);
         devicePage.setVisibility(View.GONE);
+        devicePage.setFocusable(false);
+        devicePage.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         body.addView(devicePage);
         gamePage = new ScrollView(this);
         gamePage.setVisibility(View.GONE);
+        gamePage.setFocusable(false);
+        gamePage.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         body.addView(gamePage);
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
@@ -220,7 +229,7 @@ public final class Launcher extends Activity {
             fit.setMargins(0, 0, dp(8), 0);
             chip.setLayoutParams(fit);
             chip.setPadding(dp(16), 0, dp(16), 0);
-            chip.setBackground(face(GREY, dp(18)));
+            chip.setBackground(pillFace(GREY, dp(18)));
             chips.add(chip);
             filters.addView(chip);
         }
@@ -233,6 +242,10 @@ public final class Launcher extends Activity {
         view.setSelector(new ColorDrawable(Color.TRANSPARENT));
         view.setPadding(0, dp(4), 0, dp(12));
         view.setClipToPadding(false);
+        // where the gamepad is, drawn over the card it is on: the list itself
+        // takes the focus, so no row shows it on its own
+        view.setDrawSelectorOnTop(true);
+        view.setSelector(listCursor());
         list = new GameList();
         view.setAdapter(list);
         view.setOnItemClickListener((parent, row, position, id) -> {
@@ -396,7 +409,7 @@ public final class Launcher extends Activity {
         go.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         go.setEnabled(game.ready);
         go.setAlpha(game.ready ? 1f : 0.5f);
-        go.setBackground(face(game.ready ? BLUE : GREY, dp(14)));
+        go.setBackground(pillFace(game.ready ? BLUE : GREY, dp(14)));
         left.addView(go, new LinearLayout.LayoutParams(dp(160), dp(52)));
 
         // the cards, two to a row, each with what it does under its name
@@ -418,7 +431,15 @@ public final class Launcher extends Activity {
             cards.add(gcard("Build it on this device", "Its own dump, built here again", TEXT, () -> buildFrom(game.folder)));
             cards.add(gcard("Remove it", "Its folder and its saves go", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else {
-            cards.add(gcard("Build it on this device", "Pick its .3ds dump and the app builds it here", TEXT, this::pickBuild));
+            cards.add(gcard(game.dump == null ? "Build it on this device" : "Build it from your games folder",
+                    game.dump == null ? "Pick its .3ds dump and the app builds it here" : "Its dump is in the folder: built here, nothing to pick",
+                    TEXT, () -> {
+                        if (game.dump != null) {
+                            build(game.dump);
+                        } else {
+                            pickBuild();
+                        }
+                    }));
             cards.add(gcard("Build it on a PC", "Then Add game takes its folder or pack file", DIM, null));
         }
         for (int i = 0; i < cards.size(); i += 2) {
@@ -442,7 +463,8 @@ public final class Launcher extends Activity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(16), dp(12), dp(16), dp(12));
-        card.setBackground(action == null ? rounded(0xFF121A24, dp(14)) : card(0xFF171F2B, 0xFF111823, dp(14)));
+        card.setFocusable(action != null);
+        card.setBackground(action == null ? rounded(0xFF121A24, dp(14)) : selectable(0xFF171F2B, 0xFF111823, dp(14)));
         TextView name = new TextView(this);
         name.setText(title);
         name.setTextColor(colour);
@@ -764,6 +786,48 @@ public final class Launcher extends Activity {
         return new RippleDrawable(ColorStateList.valueOf(0x22FFFFFF), face, face);
     }
 
+    /** the list's cursor: a ring in the accent around the card it is on, inset past the card's air. */
+    private Drawable listCursor() {
+        GradientDrawable ring = new GradientDrawable();
+        ring.setColor(Color.TRANSPARENT);
+        ring.setCornerRadius(dp(16));
+        ring.setStroke(dp(2), BLUE);
+        return new InsetDrawable(ring, dp(12), dp(5), dp(12), dp(5));
+    }
+
+    /**
+     * a card's face where the gamepad can land on it: the same soft gradient,
+     * a ring in the accent while it has the focus, lighter as it is pressed.
+     */
+    private Drawable selectable(int top, int bottom, float radius) {
+        GradientDrawable face = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {top, bottom});
+        face.setCornerRadius(radius);
+        GradientDrawable lit = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0xFF25364A, 0xFF1B2637});
+        lit.setCornerRadius(radius);
+        lit.setStroke(dp(2), BLUE);
+        GradientDrawable pressed = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0xFF22303F, 0xFF19232F});
+        pressed.setCornerRadius(radius);
+        pressed.setStroke(dp(2), 0xFF4C6A8F);
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[] {android.R.attr.state_focused}, lit);
+        states.addState(new int[] {android.R.attr.state_pressed}, pressed);
+        states.addState(new int[] {}, face);
+        return states;
+    }
+
+    /** a pill's face: its colour plain, blue while picked, and lit with a ring while it has the focus. */
+    private Drawable pillFace(int normal, float radius) {
+        GradientDrawable blue = rounded(BLUE, radius);
+        GradientDrawable lit = rounded(0xFF3B7BEC, radius);
+        lit.setStroke(dp(2), 0xFFBFD9FF);
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[] {android.R.attr.state_focused}, lit);
+        states.addState(new int[] {android.R.attr.state_selected}, blue);
+        states.addState(new int[] {android.R.attr.state_pressed}, blue);
+        states.addState(new int[] {}, rounded(normal, radius));
+        return states;
+    }
+
     private Button button(String label, View.OnClickListener action) {
         Button button = new Button(this);
         button.setText(label);
@@ -924,7 +988,12 @@ public final class Launcher extends Activity {
         for (Entry game : here) {
             names.add(game.name.toLowerCase(Locale.ROOT));
         }
+
         List<Entry> known = new ArrayList<>();
+        Map<String, Uri> dumps = dumps();
+        // one entry a title, the region the games folder has a dump of where
+        // there is one: a title has a profile for each of its regions
+        Map<String, Entry> byName = new LinkedHashMap<>();
         File[] profiles = new File(getFilesDir(), "titles").listFiles();
         if (profiles != null) {
             for (File profile : profiles) {
@@ -937,12 +1006,18 @@ public final class Launcher extends Activity {
                 for (Entry game : here) {
                     onDevice |= game.id.equals(id);
                 }
-                if (title == null || onDevice || !names.add(title.toLowerCase(Locale.ROOT))) {
+                if (title == null || onDevice || names.contains(title.toLowerCase(Locale.ROOT))) {
                     continue;
                 }
-                known.add(new Entry(null, id, title, false));
+                String key = title.toLowerCase(Locale.ROOT);
+                Entry entry = new Entry(null, id, title, false, dumps.get(id));
+                Entry had = byName.get(key);
+                if (had == null || (had.dump == null && entry.dump != null)) {
+                    byName.put(key, entry);
+                }
             }
         }
+        known.addAll(byName.values());
         Collections.sort(known, (a, b) -> a.name.compareToIgnoreCase(b.name));
         every.addAll(here);
         every.addAll(known);
@@ -968,6 +1043,10 @@ public final class Launcher extends Activity {
         }
         empty.setVisibility(listed.isEmpty() ? View.VISIBLE : View.GONE);
         list.notifyDataSetChanged();
+        // the Device page says which folder the games come from: kept as it is
+        if (devicePage.getVisibility() == View.VISIBLE) {
+            showDevice(true);
+        }
         // the games as the app's shortcuts too, for launchers that list them
         ShortcutManager shortcuts = getSystemService(ShortcutManager.class);
         if (shortcuts != null) {
@@ -1091,12 +1170,19 @@ public final class Launcher extends Activity {
         final String id;
         final String name;
         final boolean ready;
+        /** the dump in the games folder this title was found in, null when it has none there. */
+        final Uri dump;
 
         Entry(File folder, String id, String name, boolean ready) {
+            this(folder, id, name, ready, null);
+        }
+
+        Entry(File folder, String id, String name, boolean ready, Uri dump) {
             this.folder = folder;
             this.id = id;
             this.name = name;
             this.ready = ready;
+            this.dump = dump;
         }
     }
 
@@ -1166,7 +1252,8 @@ public final class Launcher extends Activity {
             } else {
                 // a title the profiles know and nothing was built for yet
                 text.setTextColor(0xFF9A9A9A);
-                under.setText("Not built yet · build it on this device");
+                under.setText(game.dump == null ? "Not built yet · build it on this device"
+                        : "Not built yet · its dump is in your games folder");
                 under.setTextColor(0xFFFFC45A);
             }
             column.addView(text);
@@ -1289,7 +1376,7 @@ public final class Launcher extends Activity {
     private void addGame() {
         asks()
                 .setTitle("Add game")
-                .setItems(new String[] {"A folder the kit built", "A pack file", "Build it on this device", "Run the graphics self-test"}, (dialog, which) -> {
+                .setItems(new String[] {"A games folder on this device", "A pack file", "Build it on this device", "Run the graphics self-test"}, (dialog, which) -> {
                     if (which == 3) {
                         selftest();
                         return;
@@ -1314,7 +1401,15 @@ public final class Launcher extends Activity {
         }
         Uri uri = data.getData();
         if (request == ADD_FOLDER) {
-            inBackground("Adding", progress -> withCleanUp(() -> added(importFolder(uri, progress))));
+            // the folder is this app's games folder from now on, read again
+            // when the person asks for it on the Device page
+            try {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException ignored) {
+                // a picker that hands out no lasting permission still adds what is there now
+            }
+            prefs().edit().putString("gamesfolder", uri.toString()).apply();
+            scanFolder(uri);
         } else if (request == ADD_PACK) {
             inBackground("Adding", progress -> withCleanUp(() -> added(importPack(uri, progress))));
         } else if (request == ADD_BUILD) {
@@ -1453,6 +1548,7 @@ public final class Launcher extends Activity {
     private int importFolder(Uri tree, Progress progress) throws IOException {
         List<List<Document>> found = new ArrayList<>();
         findGames(tree, DocumentsContract.getTreeDocumentId(tree), 0, found);
+        int added = 0;
         for (List<Document> game : found) {
             Document rom = null, code = null, font = null;
             List<Document> mii = new ArrayList<>();
@@ -1466,6 +1562,20 @@ public final class Launcher extends Activity {
                 } else if (miiParts(document.name)) {
                     mii.add(document);
                 }
+            }
+            if (rom == null || code == null) {
+                continue;
+            }
+            // a game already here is left as it is, so that a scan of the same
+            // folder costs nothing and never copies gigabytes twice
+            String known;
+            try (InputStream header = open(tree, rom.id)) {
+                known = titleId(header);
+            }
+            if (new File(new File(new File(volumes().get(0), "games"), known), "game.3ds").isFile()) {
+                String title = profileName(known);
+                progress.at("Already here: " + (title == null ? known : title), 0, 1);
+                continue;
             }
             File incoming = incoming();
             copy(open(tree, rom.id), new File(incoming, "game.3ds"), "game.3ds", rom.size, progress);
@@ -1482,8 +1592,9 @@ public final class Launcher extends Activity {
                 copy(open(tree, parts.id), new File(new File(incoming, "sysdata"), parts.name), "Mii parts", parts.size, progress);
             }
             settle(incoming);
+            added++;
         }
-        return found.size();
+        return added;
     }
 
     private void findGames(Uri tree, String parent, int depth, List<List<Document>> found) {
@@ -1666,15 +1777,34 @@ public final class Launcher extends Activity {
         try (RandomAccessFile in = new RandomAccessFile(rom, "r")) {
             byte[] header = new byte[0x110];
             in.readFully(header);
-            if (header[0x100] != 'N' || header[0x101] != 'C' || header[0x102] != 'S' || header[0x103] != 'D') {
-                throw new IOException("game.3ds is not a decrypted .3ds");
-            }
-            long id = 0;
-            for (int i = 7; i >= 0; i--) {
-                id = (id << 8) | (header[0x108 + i] & 0xFF);
-            }
-            return String.format("%016X", id);
+            return titleId(header);
         }
+    }
+
+    /** the title id in a decrypted .3ds's first 0x110 bytes, as 16 hex digits. */
+    private static String titleId(byte[] header) throws IOException {
+        if (header[0x100] != 'N' || header[0x101] != 'C' || header[0x102] != 'S' || header[0x103] != 'D') {
+            throw new IOException("game.3ds is not a decrypted .3ds");
+        }
+        long id = 0;
+        for (int i = 7; i >= 0; i--) {
+            id = (id << 8) | (header[0x108 + i] & 0xFF);
+        }
+        return String.format("%016X", id);
+    }
+
+    /** the title id of a game in a picked folder, from as much of its header as the folder gives. */
+    private static String titleId(InputStream in) throws IOException {
+        byte[] header = new byte[0x110];
+        int at = 0;
+        while (at < header.length) {
+            int read = in.read(header, at, header.length - at);
+            if (read < 0) {
+                throw new IOException("game.3ds is too short to read");
+            }
+            at += read;
+        }
+        return titleId(header);
     }
 
     /** name.txt and icon.png from the game's banner, its SMDH, when it has one. */
@@ -1851,6 +1981,7 @@ public final class Launcher extends Activity {
                     prefs().edit().putString("order", orders[which]).apply();
                     refresh();
                 }));
+        page.addView(folderCard());
         TextView note = new TextView(this);
         note.setText("Changes take effect the next time a game starts. More settings are in the menu in game, the Menu button or Back, where Edit touch controls moves and sizes them.\n\nAlmond Native " + version());
         note.setTextColor(DIM);
@@ -1861,6 +1992,124 @@ public final class Launcher extends Activity {
         page.addView(note);
         devicePage.removeAllViews();
         devicePage.addView(page);
+    }
+
+    /**
+     * the games folder on this device: where it is, a scan of it for games not
+     * added yet, and letting it go again.
+     */
+    private View folderCard() {
+        Uri folder = gamesFolder();
+        LinearLayout section = new LinearLayout(this);
+        section.setOrientation(LinearLayout.VERTICAL);
+        section.setPadding(dp(16), dp(16), dp(16), dp(16));
+        section.setBackground(rounded(SURFACE, dp(16)));
+        LinearLayout.LayoutParams shape = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        shape.setMargins(dp(12), dp(5), dp(12), dp(5));
+        section.setLayoutParams(shape);
+        TextView name = new TextView(this);
+        name.setText("Games folder");
+        name.setTextColor(TEXT);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        section.addView(name);
+        TextView about = new TextView(this);
+        about.setText(folder == null
+                ? "Not set. Pick the folder on this device your games are kept in: the .3ds dumps in it are listed to build here, and built games in it are added."
+                : gamesFolderName(folder) + "\nIts .3ds dumps are listed under Not built; Scan now finds the new ones.");
+        about.setTextColor(DIM);
+        about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        about.setLineSpacing(dp(2), 1f);
+        about.setPadding(0, dp(3), 0, 0);
+        section.addView(about);
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setPadding(0, dp(6), 0, 0);
+        buttons.addView(button(folder == null ? "Pick a folder" : "Change it",
+                v -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), ADD_FOLDER)), weight());
+        if (folder != null) {
+            buttons.addView(button("Scan now", v -> scanFolder(folder)), weight());
+            buttons.addView(button("Forget", v -> {
+                prefs().edit().remove("gamesfolder").remove("dumps").apply();
+                refresh();
+                showDevice(true);
+            }), weight());
+        }
+        section.addView(buttons);
+        return section;
+    }
+
+    /**
+     * the games folder read again: the built games in it added, and the .3ds
+     * dumps in it found, so that the list says what is left to build and from
+     * which file.
+     */
+    private void scanFolder(Uri tree) {
+        inBackground("Scanning", progress -> withCleanUp(() -> {
+            int added = importFolder(tree, progress);
+            List<Document> found = new ArrayList<>();
+            findDumps(tree, DocumentsContract.getTreeDocumentId(tree), 0, found);
+            Set<String> ids = new HashSet<>();
+            StringBuilder dumps = new StringBuilder();
+            for (Document dump : found) {
+                String id;
+                try (InputStream header = open(tree, dump.id)) {
+                    id = titleId(header);
+                } catch (IOException not) {
+                    continue;
+                }
+                if (!ids.add(id)) {
+                    continue;
+                }
+                dumps.append(id).append(' ').append(DocumentsContract.buildDocumentUriUsingTree(tree, dump.id)).append('\n');
+            }
+            prefs().edit().putString("dumps", dumps.toString()).apply();
+            String foundText = ids.isEmpty() ? "no .3ds dumps" : ids.size() == 1 ? "1 game" : ids.size() + " games";
+            String addedText = added == 0 ? "" : ", " + (added == 1 ? "1 built game added" : added + " built games added");
+            return "Found " + foundText + " in the folder" + addedText;
+        }));
+    }
+
+    /** every .3ds in a picked tree, a few levels down: a library of dumps, however it is laid out. */
+    private void findDumps(Uri tree, String parent, int depth, List<Document> found) {
+        List<Document> here = children(tree, parent);
+        for (Document document : here) {
+            if (!document.folder && document.name.toLowerCase(Locale.ROOT).endsWith(".3ds")) {
+                found.add(document);
+            }
+        }
+        if (depth < 4) {
+            for (Document document : here) {
+                if (document.folder) {
+                    findDumps(tree, document.id, depth + 1, found);
+                }
+            }
+        }
+    }
+
+    /** the dumps the games folder gave, each title's where it is. */
+    private Map<String, Uri> dumps() {
+        Map<String, Uri> found = new LinkedHashMap<>();
+        for (String line : prefs().getString("dumps", "").split("\n")) {
+            int space = line.indexOf(' ');
+            if (space > 0) {
+                found.put(line.substring(0, space), Uri.parse(line.substring(space + 1)));
+            }
+        }
+        return found;
+    }
+
+    /** the folder on the device games are read from, as it was picked, null for none. */
+    private Uri gamesFolder() {
+        String saved = prefs().getString("gamesfolder", null);
+        return saved == null ? null : Uri.parse(saved);
+    }
+
+    /** a picked folder's path below its volume, as the picker names it: "Native 3ds". */
+    private static String gamesFolderName(Uri tree) {
+        String id = DocumentsContract.getTreeDocumentId(tree);
+        int colon = id.indexOf(':');
+        String path = colon < 0 ? id : id.substring(colon + 1);
+        return path.isEmpty() ? "This device" : path;
     }
 
     private interface Pick {
