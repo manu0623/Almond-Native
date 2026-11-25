@@ -96,7 +96,7 @@ fn android_main(app: AndroidApp) {
         let _ = std::thread::Builder::new().name("motion".into()).spawn(move || read_motion(&pad));
     }
     let rom = folder.join("game.3ds").to_string_lossy().into_owned();
-    let game = std::thread::Builder::new().name("game".into()).spawn(move || pocket_native::run(vec![rom])).expect("a thread for the game");
+    let mut game = Some(std::thread::Builder::new().name("game".into()).spawn(move || pocket_native::run(vec![rom])).expect("a thread for the game"));
 
     let mut window = Some(window);
     let mut last_size = None;
@@ -132,8 +132,17 @@ fn android_main(app: AndroidApp) {
         if let (Ok(mut events), Some(size)) = (app.input_events_iter(), size) {
             while events.next(|event| handle(event, &pad, size)) {}
         }
-        // run only returns when it panicked, it ends the process otherwise
-        if game.is_finished() {
+        // run returns when the game cannot go on, a cartridge it cannot read
+        // among it, which ends the process. What it said goes where the
+        // launcher shows it, a window that went away saying nothing
+        if game.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
+            let why = match game.take().map(std::thread::JoinHandle::join) {
+                // the engine says why itself, in last-error.txt, when it
+                // cannot load the game
+                Some(Err(_)) => "the game panicked, its log is data/log.txt".to_string(),
+                _ => "the game stopped".to_string(),
+            };
+            let _ = std::fs::write(own.join("last-error.txt"), why);
             finish(1);
             std::process::exit(1);
         }
@@ -162,6 +171,9 @@ fn set_up(own: &Path, folder: &Path, data: &Path) {
     }
     std::env::set_var("ZAKURO_HINTS", hints);
     std::env::set_var("ZAKURO_SHADER_MANIFEST", data.join("shaders.txt"));
+    // why the game would not load, for the launcher to show: the process the
+    // engine ends says nothing else
+    std::env::set_var("POCKET_NATIVE_NOTE_FILE", own.join("last-error.txt"));
     std::env::set_var("ZAKURO_VERTEX_LIST", folder.join("vertex").join("vertex.txt"));
     std::env::set_var("POCKET_NATIVE_TITLES", own.join("titles"));
     std::env::set_var("POCKET_NATIVE_CONFIG", own.join("config"));

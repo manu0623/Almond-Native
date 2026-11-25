@@ -161,6 +161,11 @@ pub fn run(mut args: Vec<String>) {
         Ok(system) => system,
         Err(error) => {
             eprintln!("failed to load {path}: {error}");
+            // on a phone the window never opens, so the launcher shows this
+            // rather than nothing happening at all
+            if let Some(note) = std::env::var_os("POCKET_NATIVE_NOTE_FILE") {
+                let _ = std::fs::write(note, format!("{error}"));
+            }
             std::process::exit(1);
         }
     };

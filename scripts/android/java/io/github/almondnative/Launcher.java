@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageManager;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.database.Cursor;
@@ -22,6 +23,7 @@ import android.graphics.drawable.Icon;
 import android.graphics.drawable.StateListDrawable;
 import android.hardware.display.DisplayManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -98,6 +100,12 @@ public final class Launcher extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         unpackProfiles();
+        // a build runs in a service of its own, its progress and outcome on a
+        // notification: until the permission is given Android shows neither,
+        // and a build that fails looks like nothing happening at all
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, 1);
+        }
         // asked for from adb, the game's activity not being exported: the
         // self-test runs in it and the report shows on the way back
         if (getIntent().getBooleanExtra("selftest", false)) {
@@ -275,20 +283,29 @@ public final class Launcher extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // back from the self-test, whose report the game's process wrote
-        File said = new File(getFilesDir(), "selftest.txt");
+        // what the app's other parts had to say back here, where the person
+        // reads it: the self-test's report, why a game did not start, how a
+        // build went
+        told("Graphics self-test", "selftest.txt");
+        told("The game did not start", "last-error.txt");
+        told("Building a game", "build-result.txt");
+    }
+
+    /** a note one of the app's other parts left for the person, then gone */
+    private void told(String title, String name) {
+        File said = new File(getFilesDir(), name);
         if (!said.isFile()) {
             return;
         }
-        String report;
+        String text;
         try {
-            report = new String(readAll(said), StandardCharsets.UTF_8).trim();
+            text = new String(readAll(said), StandardCharsets.UTF_8).trim();
         } catch (IOException error) {
-            report = "the self-test left no report: " + error;
+            text = "nothing was written down: " + error;
         }
         said.delete();
-        Log.i("AlmondNative", "selftest: " + report.replace("\n", " | "));
-        new AlertDialog.Builder(this).setTitle("Graphics self-test").setMessage(report).setPositiveButton("OK", null).show();
+        Log.i("AlmondNative", name + ": " + text.replace("\n", " | "));
+        new AlertDialog.Builder(this).setTitle(title).setMessage(text).setPositiveButton("OK", null).show();
     }
 
     private void refresh() {

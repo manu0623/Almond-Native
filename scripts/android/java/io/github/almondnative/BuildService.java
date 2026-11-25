@@ -78,6 +78,12 @@ public final class BuildService extends Service {
                 result = "That did not work: " + error;
             }
             stage = "done";
+            // where the launcher shows it: a notification is easy to miss, and
+            // Android shows none at all until the permission is given
+            try (FileOutputStream out = new FileOutputStream(new File(getFilesDir(), "build-result.txt"))) {
+                out.write(result.getBytes(StandardCharsets.UTF_8));
+            } catch (IOException ignored) {
+            }
             getSystemService(NotificationManager.class).notify(NOTIFICATION, shown(result, 100));
             stopForeground(false);
             stopSelf();
