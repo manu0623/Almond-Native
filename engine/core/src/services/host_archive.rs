@@ -80,11 +80,24 @@ impl HostArchive {
         let Some(parent) = self.root.parent() else {
             return;
         };
-        if std::fs::create_dir_all(parent).is_err() || std::fs::rename(&dir, &self.root).is_err() {
+        if std::fs::create_dir_all(parent).is_err() {
+            log::warn!("fs: could not make {parent:?} for the save at {dir:?}");
+            return;
+        }
+        // the format goes where the archive will be first: an archive that is there without one
+        // reads to a title as a zero length save, which it is likely to reformat over the save
+        // just adopted, so there is no moment where only one of the two exists
+        let format = self.format_path();
+        if std::fs::rename(&metadata, &format).is_err() {
             log::warn!("fs: could not take over the save at {dir:?}");
             return;
         }
-        let _ = std::fs::rename(&metadata, self.format_path());
+        if std::fs::rename(&dir, &self.root).is_err() {
+            // the save stays in the tree as it was, with its metadata put back beside it
+            let _ = std::fs::rename(&format, &metadata);
+            log::warn!("fs: could not take over the save at {dir:?}");
+            return;
+        }
         log::info!("fs: adopted the save at {dir:?} as {:?}", self.root);
     }
 
@@ -281,41 +294,48 @@ impl HostArchive {
 
 /// the save an older layout left for this title: a folder named with an 8 hex save id that has
 /// the `<id>.metadata` describing its format beside it, either directly in `base`, where a
-/// `data` root placed into it lands, or in the title's tree under the SD card. The newest one
-/// wins, and every folder that is not this title's save (extdata, cec, another title's tree) is
-/// none of this one's business.
+/// `data` root placed into it lands, or in the title's tree under the SD card. A save put at the
+/// title's own folder is the deliberate one and is taken before a tree an emulator left behind,
+/// which is only looked at when there is nothing at the base: where the files sat is a better
+/// sign of which one was meant than when they were last copied there. Within one place, which
+/// can hold more than one save (Citra numbers a title's save, and not always the same way), the
+/// newest metadata is the one meant. Every folder that is not this title's save (extdata, cec,
+/// another title's tree) is none of this one's business.
 fn legacy_save(base: &Path, program_id: u64) -> Option<(PathBuf, PathBuf)> {
-    let mut found = Vec::new();
-    collect_saves(base, &mut found);
-    for data_dir in citra_save_dirs(base, program_id) {
-        collect_saves(&data_dir, &mut found);
-    }
-    found.sort_by_key(|(_, _, modified)| *modified);
-    found.pop().map(|(dir, metadata, _)| (dir, metadata))
+    std::iter::once(base.to_path_buf())
+        .chain(citra_save_dirs(base, program_id))
+        .find_map(|dir| newest_save(&dir))
 }
 
-/// adds the saves in one directory to `found`, each with when its metadata was written.
-fn collect_saves(into_dir: &Path, found: &mut Vec<(PathBuf, PathBuf, std::time::SystemTime)>) {
-    let Ok(entries) = std::fs::read_dir(into_dir) else {
-        return;
-    };
+/// the save in `dir` whose metadata was written last, for a place holding more than one.
+fn newest_save(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut newest: Option<(PathBuf, PathBuf, std::time::SystemTime)> = None;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let is_save_id = name.len() == 8 && name.chars().all(|c| c.is_ascii_hexdigit());
         if !is_save_id || !entry.path().is_dir() {
             continue;
         }
-        let metadata = into_dir.join(format!("{name}.metadata"));
-        let Some(bytes) = std::fs::read(&metadata).ok() else {
+        let metadata = dir.join(format!("{name}.metadata"));
+        let Ok(bytes) = std::fs::read(&metadata) else {
             continue;
         };
         if FormatInfo::decode(&bytes).is_none() {
             continue;
         }
-        if let Ok(modified) = std::fs::metadata(&metadata).and_then(|m| m.modified()) {
-            found.push((entry.path(), metadata, modified));
+        let modified = std::fs::metadata(&metadata)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let newer = match &newest {
+            Some((_, _, seen)) => modified >= *seen,
+            None => true,
+        };
+        if newer {
+            newest = Some((entry.path(), metadata, modified));
         }
     }
+    newest.map(|(dir, metadata, _)| (dir, metadata))
 }
 
 /// the `data` folders Citra and Azahar keep this title's save in, under the SD card Almond keeps
@@ -606,6 +626,74 @@ mod tests {
         assert!(!archive.exists(), "another title's save is not this title's");
         assert!(other.exists());
         assert!(data.join("00000001.metadata").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_save_at_the_titles_own_folder_is_taken_before_one_in_the_citra_tree() {
+        let base = scratch("adopt-base-before-tree");
+        let placed = base.join("00000001");
+        std::fs::create_dir_all(&placed).unwrap();
+        std::fs::write(placed.join("Save_0.bin"), b"placed").unwrap();
+        let placed_info = FormatInfo { total_size: 0x10_000, directories: 1, files: 2, duplicate_data: false };
+        std::fs::write(base.join("00000001.metadata"), placed_info.encode()).unwrap();
+
+        // made after the save at the base, so its metadata is the newer of the two
+        let data = citra_data(&base, "000ec300");
+        let tree = data.join("00000001");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("Save_0.bin"), b"tree").unwrap();
+        let tree_info = FormatInfo { total_size: 0x20_000, directories: 2, files: 4, duplicate_data: true };
+        std::fs::write(data.join("00000001.metadata"), tree_info.encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert_eq!(archive.format_info(), Some(placed_info), "the save put at the title's folder is the one meant");
+        assert_eq!(std::fs::read(archive.resolve("Save_0.bin").unwrap()).unwrap(), b"placed");
+        assert!(tree.exists(), "the tree is left as it was");
+        assert!(data.join("00000001.metadata").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_newest_save_in_the_citra_tree_is_taken_when_it_holds_more_than_one() {
+        let base = scratch("adopt-tree-newest");
+        let data = citra_data(&base, "000ec300");
+        let older = data.join("00000001");
+        std::fs::create_dir_all(&older).unwrap();
+        let older_info = FormatInfo { total_size: 0x10_000, ..FormatInfo::default() };
+        std::fs::write(data.join("00000001.metadata"), older_info.encode()).unwrap();
+
+        // the save the title meant is the one whose metadata was written last
+        let newer = data.join("00000002");
+        std::fs::create_dir_all(&newer).unwrap();
+        std::fs::write(newer.join("Save_0.bin"), b"second").unwrap();
+        let info = FormatInfo { total_size: 0x20_000, directories: 1, files: 1, duplicate_data: false };
+        std::fs::write(data.join("00000002.metadata"), info.encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert_eq!(archive.format_info(), Some(info));
+        assert_eq!(std::fs::read(archive.resolve("Save_0.bin").unwrap()).unwrap(), b"second");
+        assert!(older.exists(), "the save that was not meant stays where it was");
+        assert!(!newer.exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_save_that_cannot_be_moved_keeps_its_metadata_and_leaves_no_format_behind() {
+        let base = scratch("adopt-move-fails");
+        let legacy = base.join("00000001");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(base.join("00000001.metadata"), FormatInfo::default().encode()).unwrap();
+        // a file where the archive would go, so moving the save there fails after its format
+        // was put in place, and both have to end up where they started
+        std::fs::create_dir_all(base.join("savedata")).unwrap();
+        std::fs::write(base.join("savedata/00040000000EC300"), b"in the way").unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert!(!archive.exists(), "nothing was taken over");
+        assert!(legacy.exists(), "the save stays where it was");
+        assert!(base.join("00000001.metadata").exists(), "and its metadata with it");
+        assert!(!base.join("savedata/00040000000EC300.format").exists(), "no format is left without an archive");
         let _ = std::fs::remove_dir_all(base);
     }
 
