@@ -116,6 +116,10 @@ public final class BuildService extends Service {
             rom = new File(folder, "game.3ds");
             say(10, "copying " + name);
             try (OutputStream out = new FileOutputStream(rom)) {
+                // the header came off this stream already: without it back the
+                // copy starts 0x110 bytes in, and a good cartridge reads as
+                // neither a .3ds nor anything else
+                out.write(header);
                 copy(in, out, 10, 26);
             }
         }
