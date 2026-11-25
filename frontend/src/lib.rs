@@ -242,7 +242,7 @@ pub fn run(mut args: Vec<String>) {
     // when the shot was asked for: a moment after the menu closes, the game
     // drawing again by then, as the picture it shows just after is the black
     // one its pause left
-    let mut shot_at: Option<Instant> = None;
+    let (mut shot_at, mut shot_waited): (Option<Instant>, u32) = (None, 0);
 
     let mut frame = Duration::from_secs_f64(1.0 / 60.0);
     let mut next = Instant::now();
@@ -476,6 +476,7 @@ pub fn run(mut args: Vec<String>) {
                     // game's next frame up
                     (shot_wanted, menu.open) = (true, false);
                     shot_at = Some(Instant::now());
+                    shot_waited = 0;
                     settings::save(&settings_path, &settings);
                     (game.layout, game.swapped) = (Some(settings.layout), Some(settings.swapped));
                     settings::save(&game_path, &game);
@@ -706,13 +707,21 @@ pub fn run(mut args: Vec<String>) {
             };
             let pointer = areas[1].filter(|_| cursor_shown).map(|[x, y, width, height]| (x + (cursor.0 * width as f32 / 320.0) as i32, y + (cursor.1 * height as f32 / 240.0) as i32));
             system.present_panel(areas, pointer, overlays(&overlay, &controls_overlay), settings.smooth, interpolating);
-            if shot_wanted && shot_at.is_some_and(|at| at.elapsed() > Duration::from_millis(1500)) {
-                match screenshot(&mut system) {
-                    Some(file) => log::info!("screenshot: both screens into {}", file.display()),
-                    None => log::warn!("screenshot: the game has drawn nothing yet"),
+            // looked for every sixth picture, a read of both screens not
+            // being free, and taken anyway after a few seconds on a game that
+            // stays black
+            if let Some(at) = shot_at.filter(|_| shot_wanted) {
+                shot_waited += 1;
+                if shot_waited.is_multiple_of(6) && at.elapsed() > Duration::from_millis(200) {
+                    match screenshot(&mut system, at.elapsed() < Duration::from_secs(4)) {
+                        Some(file) => {
+                            log::info!("screenshot: both screens into {}", file.display());
+                            note = Some(("Saved a screenshot", Instant::now()));
+                            shot_wanted = false;
+                        }
+                        None => {}
+                    }
                 }
-                note = Some(("Saved a screenshot", Instant::now()));
-                shot_wanted = false;
             }
         }
 
@@ -848,13 +857,21 @@ fn overlays(overlay: &Option<Arc<Overlay>>, controls: &Option<Arc<Overlay>>) -> 
 /// for showing someone what a glitch looks like. The panel writes it as it
 /// draws the next picture, the screens' own memory holding black once the
 /// GPU has drawn them.
-fn screenshot(system: &mut System) -> Option<PathBuf> {
-    // the top screen over the bottom one, centred, the console's own 400 by
-    // 240 each: the pictures the panel is shown from, synced out of the GPU
+/// Both screens into a PNG beside the game's saves, the console's own 400 by
+/// 240 each, synced out of the GPU: what the menu's Screenshot keeps, for a
+/// note on how a game draws or for showing someone what a glitch looks like.
+/// With `lit` it waits for a picture with something on it, the frames just
+/// after the menu closes being black until the game draws again.
+fn screenshot(system: &mut System, lit: bool) -> Option<PathBuf> {
     let screens: Vec<(Vec<u8>, i32, i32)> = [zakuro_common::Screen::Top, zakuro_common::Screen::Bottom]
         .into_iter()
         .map(|screen| (system.read_screen(screen), screen.width() as i32, screen.height() as i32))
         .collect();
+    // a game coming back from its menu fades up from black: a picture lit
+    // like that is taken, one still dark is left for the next look
+    if lit && !screens.iter().any(|(data, _, _)| data.chunks(4).step_by(37).any(|pixel| pixel[0] > 150 || pixel[1] > 150 || pixel[2] > 150)) {
+        return None;
+    }
     let width = screens.iter().map(|screen| screen.1).max()?;
     let height: i32 = screens.iter().map(|screen| screen.2).sum();
     let mut pixels = vec![0u8; (width * height) as usize * 4];
