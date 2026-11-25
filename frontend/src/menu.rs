@@ -381,7 +381,7 @@ fn help(field: Field, profile: &Profile) -> &str {
     match field {
         Field::Layout => "Where the screens go. A tap of L2 swaps them, FN or L3 with R1 switch to one big screen.",
         Field::Aspect => "The screens' shape: as on the 3DS, by whole pixels, 4:3, 16:10, 16:9, stretched, or the top one's sides cropped.",
-        Field::Resolution => "How sharp the 3D is drawn, times the 3DS's own. Higher takes more GPU. Restart the game for it.",
+        Field::Resolution => "How sharp the 3D is drawn, times the 3DS's own. Higher takes more GPU.",
         Field::Smooth => "Smooths the picture as it is scaled up. Off is sharper, with uneven pixels.",
         Field::Stretch => "With a screen on each display, the screens stretched over theirs: no bars, but out of shape.",
         Field::Interpolate => "Fills in pictures halfway between a game's, up to 30 or 60 a second. 30 costs half as much GPU time.",

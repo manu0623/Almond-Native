@@ -1020,6 +1020,16 @@ impl Gpu {
         Ok(name)
     }
 
+    /// draws at scale times the console's resolution from now on, the menu's
+    /// newer pick without a restart, and says what it draws at.
+    pub fn set_resolution(&mut self, scale: f32) -> f32 {
+        #[cfg(feature = "gles")]
+        if let Some(hardware) = self.resources.hardware.as_mut() {
+            return hardware.set_scale(scale);
+        }
+        scale
+    }
+
     /// draws the texture pack's pictures in place of the textures they
     /// replace, or no pack's. only the host's GPU draws them, so a pack waits
     /// for enable_hardware_renderer, and says whether it is drawn.

@@ -39,6 +39,11 @@ LIBS = [
 ]
 # the sysroot: what clang includes from, what it links a shared object with
 HEADERS = "include"
+# what a game's C never reads: the compiler's own C++ and LLVM headers, its
+# sanitizers, and the other targets' headers (asm/ and friends are wanted,
+# under this target's own name)
+SKIP = {"c++", "llvm", "llvm-c", "clang", "clang-tidy", "sanitizer", "libxml2", "camera", "drm"}
+OTHER_TARGETS = {"x86_64-linux-android", "i686-linux-android", "arm-linux-androideabi", "riscv64-linux-android"}
 CRT = ("crtbegin_dynamic.o", "crtbegin_so.o", "crtend_android.o", "crtend_so.o", "crt_pad_segment.o", "libunwind.a")
 STUBS = ("libc.so", "libm.so", "libdl.so", "liblog.so")
 RESOURCES = "lib/clang/21"
@@ -77,7 +82,7 @@ def main(prefix, recompiler, out):
     for root, dirs, files in os.walk(include, followlinks=True):
         root = pathlib.Path(root)
         under = root.relative_to(include)
-        if under.parts and under.parts[0] == "c++":
+        if under.parts and under.parts[0] in SKIP | OTHER_TARGETS:
             dirs[:] = []
             continue
         for name in files:
@@ -96,12 +101,18 @@ def main(prefix, recompiler, out):
         source = prefix / "lib" / name
         if source.exists():
             (sysroot / "lib" / name).write_bytes(source.read_bytes())
+    # clang's own resources: its builtin headers, and the one builtins library
+    # it links with. The sanitizers', fuzzers' and profiles' are a quarter of
+    # the sysroot and a game's build never names one
     resources = prefix / RESOURCES
+    builtins = "lib/linux/libclang_rt.builtins-aarch64-android.a"
     for file in resources.rglob("*"):
-        if file.is_file():
-            target = sysroot / RESOURCES / file.relative_to(resources)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(file.read_bytes())
+        under = file.relative_to(resources).as_posix()
+        if not file.is_file() or not (under.startswith("include/") or under == builtins):
+            continue
+        target = sysroot / RESOURCES / under
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(file.read_bytes())
 
     archive = out / "assets" / "toolchain.zip"
     archive.parent.mkdir(parents=True, exist_ok=True)

@@ -29,7 +29,7 @@ import java.util.zip.ZipInputStream;
  */
 final class Toolchain {
     /** bumped when the bundled compiler changes, and the app unpacks it again */
-    static final String VERSION = "clang-21.1.8-lld-21.1.8-h3";
+    static final String VERSION = "clang-21.1.8-lld-21.1.8-h4";
 
     private Toolchain() {
     }

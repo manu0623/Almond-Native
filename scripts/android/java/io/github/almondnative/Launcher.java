@@ -289,6 +289,34 @@ public final class Launcher extends Activity {
         told("Graphics self-test", "selftest.txt");
         told("The game did not start", "last-error.txt");
         told("Building a game", "build-result.txt");
+        prepareShaders();
+    }
+
+    /**
+     * a game that was played drew shaders the build could not know: they are
+     * learned and listed here, in the background, so that the next start
+     * builds them all before its first frame rather than through play.
+     */
+    private void prepareShaders() {
+        File playing = new File(getFilesDir(), "playing");
+        if (!playing.isFile()) {
+            return;
+        }
+        String game;
+        try {
+            game = new String(readAll(playing), StandardCharsets.UTF_8).trim();
+        } catch (IOException error) {
+            return;
+        }
+        File recorded = new File(new File(game, "data"), "shaders.txt");
+        File precache = new File(new File(game, "vertex"), "precache.txt");
+        if (!recorded.isFile() || (precache.isFile() && precache.lastModified() >= recorded.lastModified())) {
+            return;
+        }
+        Intent service = new Intent(this, BuildService.class)
+                .setAction(BuildService.ACTION_SHADERS)
+                .putExtra(BuildService.EXTRA_GAME, game);
+        startForegroundService(service);
     }
 
     /** a note one of the app's other parts left for the person, then gone */

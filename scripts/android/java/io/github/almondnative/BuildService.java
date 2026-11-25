@@ -21,6 +21,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,6 +39,8 @@ import java.util.regex.Pattern;
 public final class BuildService extends Service {
     static final String TAG = "AlmondBuild";
     static final String ACTION_BUILD = "io.github.almondnative.BUILD";
+    /** the shaders a session used, learned and listed, without rebuilding */
+    static final String ACTION_SHADERS = "io.github.almondnative.SHADERS";
     static final String EXTRA_GAME = "game";
 
     /** what the launcher shows: idle, or the step a build is on */
@@ -60,12 +63,25 @@ public final class BuildService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null || !ACTION_BUILD.equals(intent.getAction())) {
+        if (intent == null) {
             return START_NOT_STICKY;
         }
         String game = intent.getStringExtra(EXTRA_GAME);
-        if (game == null) {
+        if (game == null || !(ACTION_SHADERS.equals(intent.getAction()) || ACTION_BUILD.equals(intent.getAction()))) {
             stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_SHADERS.equals(intent.getAction())) {
+            startForeground(NOTIFICATION, shown("Preparing the shaders", 0));
+            new Thread(() -> {
+                try {
+                    shaderLists(new File(game));
+                } catch (Throwable error) {
+                    Log.e(TAG, "the shaders were not prepared", error);
+                }
+                stopForeground(true);
+                stopSelf();
+            }, "shaders").start();
             return START_NOT_STICKY;
         }
         Uri uri = Uri.parse(game);
@@ -141,6 +157,12 @@ public final class BuildService extends Service {
         // game's files alone, and vertex.txt is what the renderer builds its
         // programs from the first time it needs them
         say(28, "collecting the shaders");
+        // a session's shaders learned first, so this build's precache list has
+        // what the game was seen to draw
+        File recorded = new File(new File(folder, "data"), "shaders.txt");
+        if (recorded.isFile()) {
+            run("learn", Arrays.asList(Toolchain.recompiler(this).getAbsolutePath(), "learn", rom.getAbsolutePath(), recorded.getAbsolutePath(), new File(folder, LEARNED).getAbsolutePath()));
+        }
         shaders(rom, folder);
         say(28, "recompiling " + name);
         recompile(rom, out, log);
@@ -174,16 +196,61 @@ public final class BuildService extends Service {
     private void shaders(File rom, File folder) {
         File vertex = new File(folder, "vertex");
         vertex.mkdirs();
-        ProcessBuilder builder = new ProcessBuilder(Toolchain.recompiler(this).getAbsolutePath(), "shaders", rom.getAbsolutePath(), vertex.getAbsolutePath());
+        // the title's learned list, when a session has left one: with it the
+        // recompiler also writes precache.txt, the programs the engine builds
+        // on the start's screen rather than in game
+        File learned = new File(folder, LEARNED);
+        List<String> command = new ArrayList<>();
+        command.add(Toolchain.recompiler(this).getAbsolutePath());
+        command.add("shaders");
+        command.add(rom.getAbsolutePath());
+        command.add(vertex.getAbsolutePath());
+        if (learned.isFile()) {
+            command.add("precache");
+            command.add(learned.getAbsolutePath());
+        }
+        run("shaders", command);
+    }
+
+    /** the file a run's shaders are learned into, one of these a game */
+    private static final String LEARNED = "title-shaders.txt";
+
+    /**
+     * a session's shaders, learned into the title's list, and the precache
+     * list written from it: the vertex programs the game's files hold are all
+     * known before a start, but the programs the game's drawing state makes
+     * are only known once it has drawn, which is what a run's shaders.txt
+     * records. A start then builds them all before the first frame.
+     */
+    private void shaderLists(File folder) throws IOException {
+        File rom = new File(folder, "game.3ds");
+        File recorded = new File(new File(folder, "data"), "shaders.txt");
+        File learned = new File(folder, LEARNED);
+        File precache = new File(new File(folder, "vertex"), "precache.txt");
+        if (!rom.isFile() || !recorded.isFile()) {
+            return;
+        }
+        Toolchain.unpack(this);
+        if (!learned.isFile() || learned.lastModified() < recorded.lastModified()) {
+            run("learn", Arrays.asList(Toolchain.recompiler(this).getAbsolutePath(), "learn", rom.getAbsolutePath(), recorded.getAbsolutePath(), learned.getAbsolutePath()));
+        }
+        if (!precache.isFile() || precache.lastModified() < recorded.lastModified()) {
+            shaders(rom, folder);
+        }
+    }
+
+    /** 3dsrecomp, its output to the log, a step that fails leaving the rest be */
+    private void run(String what, List<String> command) {
+        ProcessBuilder builder = new ProcessBuilder(command);
         builder.redirectErrorStream(true);
         Toolchain.applyTo(builder, this);
         try (BufferedReader lines = new BufferedReader(new InputStreamReader(builder.start().getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = lines.readLine()) != null) {
-                Log.i(TAG, "shaders: " + line);
+                Log.i(TAG, what + ": " + line);
             }
         } catch (IOException error) {
-            Log.w(TAG, "the shaders were not collected, they get built as the game needs them", error);
+            Log.w(TAG, what + " did not finish, the shaders get built as the game needs them", error);
         }
     }
 

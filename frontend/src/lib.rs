@@ -119,7 +119,7 @@ pub fn run(mut args: Vec<String>) {
     }
     let Some(path) = args.first().cloned() else {
         eprintln!("usage: pocket-native <rom>, or pocket-native --probe <rom> [frames]");
-        std::process::exit(2);
+        leave(2);
     };
     let data = PathBuf::from(std::env::var_os("ZAKURO_DATA").unwrap_or_else(|| ".".into()));
     let game_path = data.join("settings.toml");
@@ -166,7 +166,7 @@ pub fn run(mut args: Vec<String>) {
             if let Some(note) = std::env::var_os("POCKET_NATIVE_NOTE_FILE") {
                 let _ = std::fs::write(note, format!("{error}"));
             }
-            std::process::exit(1);
+            leave(1);
         }
     };
 
@@ -421,6 +421,8 @@ pub fn run(mut args: Vec<String>) {
                 Action::Redraw => menu_drawn = false,
                 Action::Changed => {
                     apply_options(&mut system, &game, &profile, &base_drops);
+                    // the menu's new scale, from the next frame on
+                    system.gpu.set_resolution(settings.resolution);
                     let advanced = Advanced::of(&game, &profile);
                     (most_skipped, shown_only) = (fixed_skip.unwrap_or(advanced.frame_skip), advanced.shown_only);
                     apply_power(settings.power);
@@ -724,7 +726,7 @@ pub fn run(mut args: Vec<String>) {
     if let Some(probe) = probe {
         let code = probe.report(&mut system, &path, title_id, !profile.name.is_empty(), frame_number, stopped);
         system.stop_gpu();
-        std::process::exit(code);
+        leave(code);
     }
     settings::save(&settings_path, &settings);
     (game.layout, game.swapped) = (Some(settings.layout), Some(settings.swapped));
@@ -733,7 +735,21 @@ pub fn run(mut args: Vec<String>) {
     if let Some(before) = BEFORE_EXIT.get() {
         before(exit_code);
     }
-    std::process::exit(exit_code);
+    leave(exit_code);
+}
+
+/// ends the process, on Android with _exit: the GPU's driver keeps threads of
+/// its own, a VsyncReceiver among them, and running their destructors as the
+/// process goes aborts a quit at a mutex it has already destroyed. Everything
+/// worth keeping is written by here: the log, the settings, the shader cache.
+fn leave(code: i32) -> ! {
+    #[cfg(target_os = "android")]
+    // SAFETY: no destructors are wanted, and every thread is about to end
+    unsafe {
+        libc::_exit(code)
+    }
+    #[cfg(not(target_os = "android"))]
+    std::process::exit(code)
 }
 
 /// the overlays drawn over the screens, the menu or the status line, then
