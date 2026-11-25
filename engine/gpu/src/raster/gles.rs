@@ -1120,6 +1120,11 @@ struct Hidden {
     next: u64,
     /// the picture it was first found off screen in, 0 while drawn
     since: u64,
+    /// pictures in a row it was found off screen in, which it takes two of to
+    /// be left out: a tree or a bush at the edge of the screen, with the
+    /// camera panning, is found off screen every other picture or so, and
+    /// leaving it out for those flickered
+    misses: u8,
 }
 
 /// heavy draws left out and heavy draws looked at, for ZAKURO_GLES_TIMES.
@@ -1137,6 +1142,10 @@ static RETURNED: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atomic:
 /// the screen as the camera turned; drawing it every three pictures or so
 /// leaves a mesh entering the view a sliver short a picture or two instead.
 const HIDDEN_PICTURES: u64 = 2;
+/// pictures in a row a mesh has to be found off screen in before it is left
+/// out: one that is found off screen only now and then, at the edge of the
+/// screen as the camera pans, is one that is on screen and would flicker.
+const MISSES_BEFORE_HIDDEN: u8 = 2;
 /// pictures one found on screen is drawn without a query: each query costs a
 /// tiled GPU's driver work, and what is on screen mostly stays there
 const SEEN_PICTURES: u64 = 4;
@@ -1171,6 +1180,7 @@ impl Occlusion {
         if !stable {
             mesh.until = 0;
             mesh.since = 0;
+            mesh.misses = 0;
             free.extend(mesh.query.take().map(|(query, _)| query));
             return (true, None);
         }
@@ -1178,9 +1188,15 @@ impl Occlusion {
             if let Some((query, tried)) = mesh.query {
                 if picture > tried && gl.get_query_parameter_u32(query, glow::QUERY_RESULT_AVAILABLE) != 0 {
                     if gl.get_query_parameter_u32(query, glow::QUERY_RESULT) == 0 {
-                        mesh.since = if mesh.since == 0 { tried } else { mesh.since };
-                        mesh.until = picture + HIDDEN_PICTURES;
+                        mesh.misses = mesh.misses.saturating_add(1);
+                        if mesh.misses >= MISSES_BEFORE_HIDDEN {
+                            mesh.since = if mesh.since == 0 { tried } else { mesh.since };
+                            mesh.until = picture + HIDDEN_PICTURES;
+                        } else {
+                            mesh.until = 0;
+                        }
                     } else {
+                        mesh.misses = 0;
                         if mesh.since != 0 {
                             let left_out = tried.saturating_sub(mesh.since);
                             RETURNED[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
