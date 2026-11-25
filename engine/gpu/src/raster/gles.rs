@@ -396,6 +396,10 @@ fn report_times() {
     if culled[1] > 0 {
         log::info!("culled {} of {} heavy draws", culled[0], culled[1]);
     }
+    let returned = RETURNED.each_ref().map(|count| count.swap(0, std::sync::atomic::Ordering::Relaxed));
+    if returned[0] > 0 {
+        log::info!("{} meshes came back into view, left out {} pictures in all, {} at most", returned[0], returned[1], returned[2]);
+    }
 }
 
 fn fnv(parts: &[&str]) -> u64 {
@@ -1114,13 +1118,25 @@ struct Hidden {
     until: u64,
     /// found on screen, drawn without a query until then
     next: u64,
+    /// the picture it was first found off screen in, 0 while drawn
+    since: u64,
 }
 
 /// heavy draws left out and heavy draws looked at, for ZAKURO_GLES_TIMES.
 static CULLED: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+/// meshes found on screen again, the pictures they were left out for in all,
+/// and the most any of them was, for ZAKURO_GLES_TIMES: a mesh the camera
+/// brought back into view was drawn late those pictures, scenery popping in
+/// at the edge of the screen.
+static RETURNED: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atomic::AtomicU64::new(0) }; 3];
 
-/// pictures a mesh found off screen is left out for, two or three frames.
-const HIDDEN_PICTURES: u64 = 8;
+/// pictures a mesh found off screen is left out for after the query saying so
+/// came back, two: a driver takes a picture or two to answer, and the camera
+/// can put the mesh back on screen in any of them. it was left out for seven
+/// before, drawn that many pictures late, scenery popping in at the edge of
+/// the screen as the camera turned; drawing it every three pictures or so
+/// leaves a mesh entering the view a sliver short a picture or two instead.
+const HIDDEN_PICTURES: u64 = 2;
 /// pictures one found on screen is drawn without a query: each query costs a
 /// tiled GPU's driver work, and what is on screen mostly stays there
 const SEEN_PICTURES: u64 = 4;
@@ -1154,6 +1170,7 @@ impl Occlusion {
         let mesh = &mut copies.copies[index];
         if !stable {
             mesh.until = 0;
+            mesh.since = 0;
             free.extend(mesh.query.take().map(|(query, _)| query));
             return (true, None);
         }
@@ -1161,8 +1178,16 @@ impl Occlusion {
             if let Some((query, tried)) = mesh.query {
                 if picture > tried && gl.get_query_parameter_u32(query, glow::QUERY_RESULT_AVAILABLE) != 0 {
                     if gl.get_query_parameter_u32(query, glow::QUERY_RESULT) == 0 {
-                        mesh.until = tried + HIDDEN_PICTURES;
+                        mesh.since = if mesh.since == 0 { tried } else { mesh.since };
+                        mesh.until = picture + HIDDEN_PICTURES;
                     } else {
+                        if mesh.since != 0 {
+                            let left_out = tried.saturating_sub(mesh.since);
+                            RETURNED[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            RETURNED[1].fetch_add(left_out, std::sync::atomic::Ordering::Relaxed);
+                            RETURNED[2].fetch_max(left_out, std::sync::atomic::Ordering::Relaxed);
+                            mesh.since = 0;
+                        }
                         mesh.next = picture + SEEN_PICTURES;
                     }
                     free.push(query);
