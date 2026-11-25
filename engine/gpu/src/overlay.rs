@@ -15,6 +15,10 @@ pub struct Overlay {
     /// over the bottom screen, wherever it is shown, its 640x480 twice the
     /// screen's size, rather than in the middle.
     pub bottom: bool,
+    /// the pixels the triangles are drawn in over the area they cover: the
+    /// panel's own, or a multiple of them for an interface drawn at the
+    /// screen's resolution rather than the panel's. Empty for the area's.
+    pub space: [i32; 2],
 }
 
 /// where 640x480 sits fitted into an area of the layout, centred: left, top

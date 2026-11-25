@@ -487,7 +487,9 @@ pub fn run(mut args: Vec<String>) {
                 let drawn_controls = controls_overlay.as_ref().map(|overlay| Arc::as_ptr(overlay) as usize);
                 if !menu_drawn || drawn_controls != menu_controls {
                     if !menu_drawn {
-                        let mut canvas = Canvas::new(&font, PANEL);
+                        // at the atlas's own resolution: its text is read at
+                        // the screen's pixels instead of the panel's magnified
+                        let mut canvas = Canvas::sharp(&font, PANEL);
                         menu.draw(&mut canvas, &settings, &game, &profile, &title);
                         overlay = Some(Arc::new(canvas.finish()));
                     }
@@ -689,7 +691,7 @@ pub fn run(mut args: Vec<String>) {
                 let now = Status::now(&settings, last_fps, said, building, saving);
                 if now != status {
                     overlay = now.as_ref().map(|now| {
-                        let mut canvas = Canvas::new(&font, PANEL);
+                        let mut canvas = Canvas::sharp(&font, PANEL);
                         now.draw(&mut canvas, PANEL);
                         Arc::new(canvas.finish())
                     });

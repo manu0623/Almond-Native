@@ -29,11 +29,17 @@ struct Glyph {
 
 pub struct Face {
     glyphs: HashMap<char, Glyph>,
+    /// in panel pixels, the atlas's own divided by the font's bake.
     pub ascent: f32,
+    /// the atlas's pixels to a panel pixel.
+    bake: f32,
 }
 
 pub struct Font {
     pub faces: Vec<Face>,
+    /// how many pixels the atlas holds to a panel pixel, 3 as baked: a canvas
+    /// drawn at this scale draws its text in the screen's own pixels.
+    pub bake: f32,
     size: [u32; 2],
     /// the atlas as premultiplied white.
     pixels: Arc<Vec<u8>>,
@@ -49,10 +55,14 @@ fn read<const N: usize>(data: &[u8], at: &mut usize) -> [u8; N] {
 
 impl Font {
     pub fn load() -> Font {
-        assert_eq!(&FONT[..4], b"PNF1", "the menu font is not one tools/bake_font.py made");
+        assert_eq!(&FONT[..4], b"PNF2", "the menu font is not one tools/bake_font.py made");
         let mut at = 4;
         let u16_at = |at: &mut usize| u16::from_le_bytes(read(FONT, at));
         let (width, height, count) = (u16_at(&mut at), u16_at(&mut at), u16_at(&mut at));
+        // the glyphs are the atlas's pixels, laid out at this many to a panel
+        // pixel: their sizes and bearings come back to the panel's own
+        let bake = u16_at(&mut at) as f32;
+        assert!(bake >= 1.0, "the menu font's atlas is under a pixel to a pixel");
         let mut faces = Vec::new();
         for _ in 0..count {
             let (_, _, ascent, glyphs) = (u16_at(&mut at), u16_at(&mut at), u16_at(&mut at), u16_at(&mut at));
@@ -66,7 +76,7 @@ impl Font {
                     table.insert(char, Glyph { x, y, width: w, height: h, left, top, advance });
                 }
             }
-            faces.push(Face { glyphs: table, ascent: ascent as f32 });
+            faces.push(Face { glyphs: table, ascent: ascent as f32 / bake, bake });
         }
         let pixels = FONT[at..at + width as usize * height as usize].iter().flat_map(|&alpha| [alpha; 4]).collect();
         let middle = DISC_SIZE as f32 / 2.0;
@@ -76,19 +86,22 @@ impl Font {
                 [((middle - x.hypot(y)).clamp(0.0, 1.0) * 255.0) as u8; 4]
             })
             .collect();
-        Font { faces, size: [width as u32, height as u32], pixels: Arc::new(pixels), disc: Arc::new(disc) }
+        Font { faces, bake, size: [width as u32, height as u32], pixels: Arc::new(pixels), disc: Arc::new(disc) }
     }
 }
 
 impl Face {
     pub fn width(&self, text: &str) -> f32 {
-        text.chars().map(|char| self.glyphs.get(&char).map_or(0.0, |glyph| glyph.advance as f32)).sum()
+        text.chars().map(|char| self.glyphs.get(&char).map_or(0.0, |glyph| glyph.advance as f32 / self.bake)).sum()
     }
 }
 
 /// boxes and text over the screens, in panel pixels from the top left.
 pub struct Canvas<'a> {
     font: &'a Font,
+    /// panel pixels to the canvas's own, 1 or the atlas's bake for a canvas
+    /// drawn at the screen's resolution.
+    scale: f32,
     boxes: OverlayMesh,
     discs: OverlayMesh,
     text: OverlayMesh,
@@ -110,9 +123,21 @@ pub fn rgba([r, g, b]: [u8; 3], alpha: u8) -> [u8; 4] {
 }
 
 impl<'a> Canvas<'a> {
-    pub fn new(font: &'a Font, (width, height): (u32, u32)) -> Canvas<'a> {
+    pub fn new(font: &'a Font, size: (u32, u32)) -> Canvas<'a> {
+        Canvas::scaled(font, size, 1.0)
+    }
+
+    /// a canvas drawn at the atlas's own resolution, its coordinates still the
+    /// panel's: its text reaches the screen in the screen's pixels instead of
+    /// being magnified from the panel's, which at a few times the 3DS's screen
+    /// read as a low resolution.
+    pub fn sharp(font: &'a Font, size: (u32, u32)) -> Canvas<'a> {
+        Canvas::scaled(font, size, font.bake)
+    }
+
+    pub fn scaled(font: &'a Font, (width, height): (u32, u32), scale: f32) -> Canvas<'a> {
         let mesh = |texture| OverlayMesh { texture, clip: [0, 0, width, height], vertices: Vec::new(), indices: Vec::new() };
-        Canvas { font, boxes: mesh(WHITE), discs: mesh(DISC), text: mesh(ATLAS), logo: None }
+        Canvas { font, scale, boxes: mesh(WHITE), discs: mesh(DISC), text: mesh(ATLAS), logo: None }
     }
 
     pub fn measure(&self, face: usize, text: &str) -> f32 {
@@ -124,11 +149,12 @@ impl<'a> Canvas<'a> {
     }
 
     pub fn disc(&mut self, [x, y]: [f32; 2], radius: f32, color: [u8; 4]) {
+        let (x, y, radius) = (x * self.scale, y * self.scale, radius * self.scale);
         quad(&mut self.discs, [x - radius, y - radius, x + radius, y + radius], [0.0, 0.0, 1.0, 1.0], color);
     }
 
     pub fn fill(&mut self, area: [f32; 4], color: [u8; 4]) {
-        quad(&mut self.boxes, area, [0.0, 0.0, 1.0, 1.0], color);
+        quad(&mut self.boxes, area.map(|edge| edge * self.scale), [0.0, 0.0, 1.0, 1.0], color);
     }
 
     /// a rectangle with rounded corners, a band through its middle with a
@@ -160,18 +186,23 @@ impl<'a> Canvas<'a> {
     pub fn text(&mut self, face: usize, text: &str, x: f32, y: f32, color: [u8; 4], right: bool) {
         let face = &self.font.faces[face];
         let [width, height] = self.font.size.map(|size| size as f32);
+        let bake = self.font.bake;
         let mut pen = if right { x - face.width(text) } else { x };
-        let baseline = (y + face.ascent).round();
+        let baseline = y + face.ascent;
         for char in text.chars() {
             let Some(&glyph) = face.glyphs.get(&char) else { continue };
             if glyph.width > 0 {
-                let left = (pen + glyph.left as f32).round();
-                let top = baseline + glyph.top as f32;
+                // the glyph in panel pixels, then where the canvas puts them: a
+                // pixel-aligned left edge, its size the atlas's own when the
+                // canvas is drawn at the atlas's scale
+                let left = ((pen + glyph.left as f32 / bake) * self.scale).round();
+                let top = ((baseline + glyph.top as f32 / bake) * self.scale).round();
+                let (across, down) = (glyph.width as f32 / bake * self.scale, glyph.height as f32 / bake * self.scale);
                 let (u, v) = (glyph.x as f32 / width, glyph.y as f32 / height);
                 let (du, dv) = (glyph.width as f32 / width, glyph.height as f32 / height);
-                quad(&mut self.text, [left, top, left + glyph.width as f32, top + glyph.height as f32], [u, v, u + du, v + dv], color);
+                quad(&mut self.text, [left, top, left + across, top + down], [u, v, u + du, v + dv], color);
             }
-            pen += glyph.advance as f32;
+            pen += glyph.advance as f32 / bake;
         }
     }
 
@@ -183,15 +214,21 @@ impl<'a> Canvas<'a> {
     /// the monochrome logo in color, its top left at x, y.
     pub fn logo(&mut self, x: f32, y: f32, color: [u8; 4]) {
         let [width, height] = Canvas::logo_size();
-        let clip = self.boxes.clip;
+        let (scale, clip) = (self.scale, self.boxes.clip);
         let mesh = self.logo.get_or_insert_with(|| OverlayMesh { texture: LOGO_ID, clip, vertices: Vec::new(), indices: Vec::new() });
-        quad(mesh, [x, y, x + width, y + height], [0.0, 0.0, 1.0, 1.0], color);
+        quad(mesh, [x * scale, y * scale, (x + width) * scale, (y + height) * scale], [0.0, 0.0, 1.0, 1.0], color);
     }
 
     pub fn finish(self) -> Overlay {
+        // the space its triangles were drawn in, the panel's clamped to whole
+        // pixels on a sharp canvas
+        let clip = self.boxes.clip;
+        let space = [(clip[2] as f32 * self.scale) as i32, (clip[3] as f32 * self.scale) as i32];
         let mut textures = vec![
             OverlayTexture { id: WHITE, offset: None, size: [1, 1], pixels: vec![255; 4], linear: false },
-            OverlayTexture { id: ATLAS, offset: None, size: self.font.size, pixels: self.font.pixels.to_vec(), linear: false },
+            // filtered: a glyph of the atlas is a pixel's or a little less on
+            // screen, and a nearest read of it would drop rows of its strokes
+            OverlayTexture { id: ATLAS, offset: None, size: self.font.size, pixels: self.font.pixels.to_vec(), linear: true },
             OverlayTexture { id: DISC, offset: None, size: [DISC_SIZE; 2], pixels: self.font.disc.to_vec(), linear: true },
         ];
         let mut meshes = vec![self.boxes, self.discs, self.text];
@@ -200,6 +237,6 @@ impl<'a> Canvas<'a> {
             textures.push(OverlayTexture { id: LOGO_ID, offset: None, size: [width, height], pixels: LOGO[4..].iter().flat_map(|&alpha| [alpha; 4]).collect(), linear: false });
             meshes.push(logo);
         }
-        Overlay { textures, meshes, free: Vec::new(), whole: false, bottom: false }
+        Overlay { textures, meshes, free: Vec::new(), whole: false, bottom: false, space }
     }
 }

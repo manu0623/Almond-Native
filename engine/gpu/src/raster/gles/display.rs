@@ -870,10 +870,13 @@ pub(super) unsafe fn draw_overlay(gl: &glow::Context, panel: &mut Panel, overlay
             gl.delete_texture(texture);
         }
     }
+    // the area the interface covers, and the pixels its triangles count in:
+    // the same, unless it was drawn at a multiple of them for the screen
     let [x, y, width, tall] = fit.area([0, 0, space.0, space.1]);
     gl.viewport(x, height - y - tall, width, tall);
     gl.use_program(Some(program));
-    gl.uniform_2_f32(gl.get_uniform_location(program, "size").as_ref(), space.0 as f32, space.1 as f32);
+    let [across, down] = if overlay.space[0] > 0 && overlay.space[1] > 0 { overlay.space } else { [space.0, space.1] };
+    gl.uniform_2_f32(gl.get_uniform_location(program, "size").as_ref(), across as f32, down as f32);
     gl.uniform_1_i32(gl.get_uniform_location(program, "source").as_ref(), 0);
     gl.bind_vertex_array(Some(array));
     gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertices));
