@@ -59,21 +59,22 @@ impl HostArchive {
     /// before the title reads it.
     pub fn save_data(base: &Path, program_id: u64) -> HostArchive {
         let archive = HostArchive::at(base.join("savedata").join(format!("{program_id:016X}")));
-        archive.adopt_legacy(base);
+        archive.adopt_legacy(base, program_id);
         archive
     }
 
-    /// Azahar and Citra keep a title's save as `<base>/<8 hex save id>/` with `<id>.metadata`
-    /// beside it holding the same format this archive records, and that is the shape Argosy
-    /// zips and places at a title's user folder. Almond names the archive after the program
-    /// instead, so a save found that way is moved into `savedata/` the first time the title
-    /// opens it, and its metadata becomes the `.format`: one layout on the card after that,
-    /// whichever emulator wrote it.
-    fn adopt_legacy(&self, base: &Path) {
+    /// Azahar and Citra keep a title's save as a folder named with an 8 hex save id that has
+    /// `<id>.metadata` beside it holding the same format this archive records. That is the shape
+    /// Argosy zips and places at a title's user folder, and the shape a title's save takes in the
+    /// Citra tree under the SD card. Almond names the archive after the program instead, so a
+    /// save found either way is moved into `savedata/` the first time the title opens it, and
+    /// its metadata becomes the `.format`: one layout on the card after that, whichever
+    /// emulator wrote it.
+    fn adopt_legacy(&self, base: &Path, program_id: u64) {
         if self.exists() || !base.is_dir() {
             return;
         }
-        let Some((dir, metadata)) = legacy_save(base) else {
+        let Some((dir, metadata)) = legacy_save(base, program_id) else {
             return;
         };
         let Some(parent) = self.root.parent() else {
@@ -278,28 +279,86 @@ impl HostArchive {
     }
 }
 
-/// a save an older layout left directly in `base`: a folder named with an 8 hex save id that
-/// has the `<id>.metadata` describing its format beside it. The newest one wins, and every
-/// other folder there (extdata, cec, a name that is not a save id) is none of this one's
-/// business.
-fn legacy_save(base: &Path) -> Option<(PathBuf, PathBuf)> {
-    let mut found: Vec<(PathBuf, PathBuf, std::time::SystemTime)> = std::fs::read_dir(base)
-        .ok()?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let is_save_id = name.len() == 8 && name.chars().all(|c| c.is_ascii_hexdigit());
-            if !is_save_id || !entry.path().is_dir() {
-                return None;
-            }
-            let metadata = base.join(format!("{name}.metadata"));
-            FormatInfo::decode(&std::fs::read(&metadata).ok()?)?;
-            let modified = std::fs::metadata(&metadata).ok()?.modified().ok()?;
-            Some((entry.path(), metadata, modified))
-        })
-        .collect();
+/// the save an older layout left for this title: a folder named with an 8 hex save id that has
+/// the `<id>.metadata` describing its format beside it, either directly in `base`, where a
+/// `data` root placed into it lands, or in the title's tree under the SD card. The newest one
+/// wins, and every folder that is not this title's save (extdata, cec, another title's tree) is
+/// none of this one's business.
+fn legacy_save(base: &Path, program_id: u64) -> Option<(PathBuf, PathBuf)> {
+    let mut found = Vec::new();
+    collect_saves(base, &mut found);
+    for data_dir in citra_save_dirs(base, program_id) {
+        collect_saves(&data_dir, &mut found);
+    }
     found.sort_by_key(|(_, _, modified)| *modified);
     found.pop().map(|(dir, metadata, _)| (dir, metadata))
+}
+
+/// adds the saves in one directory to `found`, each with when its metadata was written.
+fn collect_saves(into_dir: &Path, found: &mut Vec<(PathBuf, PathBuf, std::time::SystemTime)>) {
+    let Ok(entries) = std::fs::read_dir(into_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_save_id = name.len() == 8 && name.chars().all(|c| c.is_ascii_hexdigit());
+        if !is_save_id || !entry.path().is_dir() {
+            continue;
+        }
+        let metadata = into_dir.join(format!("{name}.metadata"));
+        let Some(bytes) = std::fs::read(&metadata).ok() else {
+            continue;
+        };
+        if FormatInfo::decode(&bytes).is_none() {
+            continue;
+        }
+        if let Ok(modified) = std::fs::metadata(&metadata).and_then(|m| m.modified()) {
+            found.push((entry.path(), metadata, modified));
+        }
+    }
+}
+
+/// the `data` folders Citra and Azahar keep this title's save in, under the SD card Almond keeps
+/// beside the save: `sdmc/Nintendo 3DS/<id0>/<id1>/title/<category>/<title>/data`. The console
+/// directories are whatever the emulator made them, and the two title folders are matched
+/// whatever case they were written in, because the tree came from another emulator.
+fn citra_save_dirs(base: &Path, program_id: u64) -> Vec<PathBuf> {
+    let id = format!("{program_id:016X}").to_ascii_lowercase();
+    let (category, title) = id.split_at(8);
+    let mut dirs = Vec::new();
+    for id0 in subdirectories(&base.join("sdmc").join("Nintendo 3DS")) {
+        for id1 in subdirectories(&id0) {
+            for category_dir in subdirectories(&id1.join("title")) {
+                if !named(&category_dir, category) {
+                    continue;
+                }
+                for title_dir in subdirectories(&category_dir) {
+                    if named(&title_dir, title) {
+                        dirs.push(title_dir.join("data"));
+                    }
+                }
+            }
+        }
+    }
+    dirs
+}
+
+fn subdirectories(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn named(dir: &Path, name: &str) -> bool {
+    dir.file_name()
+        .and_then(|found| found.to_str())
+        .is_some_and(|found| found.eq_ignore_ascii_case(name))
 }
 
 /// reads up to buffer.len() bytes at offset, returning how many were
@@ -487,6 +546,66 @@ mod tests {
         assert!(!archive.exists(), "nothing there is a save");
         assert!(base.join("extdata").exists());
         assert!(base.join("cec/MBoxList____").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// the `data` folder a title's save sits in inside the Citra tree under the SD card.
+    fn citra_data(base: &Path, title_dir: &str) -> PathBuf {
+        base.join("sdmc")
+            .join("Nintendo 3DS")
+            .join("00000000000000000000000000000000")
+            .join("11111111111111111111111111111111")
+            .join("title")
+            .join("00040000")
+            .join(title_dir)
+            .join("data")
+    }
+
+    #[test]
+    fn a_save_in_the_citra_tree_is_adopted() {
+        let base = scratch("adopt-tree");
+        let data = citra_data(&base, "000ec300");
+        let legacy = data.join("00000001");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("Save_0.bin"), b"slot").unwrap();
+        let info = FormatInfo { total_size: 0x40_000, directories: 1, files: 4, duplicate_data: true };
+        std::fs::write(data.join("00000001.metadata"), info.encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert!(archive.exists(), "the save moved to where the title reads it");
+        assert_eq!(archive.format_info(), Some(info), "its metadata became the format");
+        assert_eq!(std::fs::read(archive.resolve("Save_0.bin").unwrap()).unwrap(), b"slot");
+        assert!(!legacy.exists(), "nothing is left in the tree");
+        assert!(!data.join("00000001.metadata").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_citra_tree_is_read_whatever_case_its_folders_were_written_in() {
+        let base = scratch("adopt-tree-case");
+        let data = citra_data(&base, "000EC300");
+        let legacy = data.join("00000001");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(data.join("00000001.metadata"), FormatInfo::default().encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert!(archive.exists(), "a tree in another case is still the title's");
+        assert!(!legacy.exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn another_titles_citra_tree_is_left_alone() {
+        let base = scratch("adopt-tree-other");
+        let data = citra_data(&base, "000ec301");
+        let other = data.join("00000001");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(data.join("00000001.metadata"), FormatInfo::default().encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert!(!archive.exists(), "another title's save is not this title's");
+        assert!(other.exists());
+        assert!(data.join("00000001.metadata").exists());
         let _ = std::fs::remove_dir_all(base);
     }
 
