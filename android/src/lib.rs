@@ -39,6 +39,10 @@ const TOUCHSCREEN: u32 = 0x0000_1002;
 #[no_mangle]
 fn android_main(app: AndroidApp) {
     let own = app.internal_data_path().unwrap_or_else(|| PathBuf::from("/data/local/tmp/almond-native"));
+    // the graphics self-test, which the launcher starts in place of a game
+    if bool_extra(&app, "selftest") {
+        selftest(app, own);
+    }
     let folder = match game_extra(&app) {
         Ok(Some(folder)) => PathBuf::from(folder),
         // started without a game, from a shortcut to this activity
@@ -368,6 +372,54 @@ fn game_extra(app: &AndroidApp) -> Result<Option<String>, String> {
         let _ = env.exception_clear();
     }
     extra.map_err(|e| e.to_string())
+}
+
+/// an intent extra that is a switch, false when the activity was given none.
+fn bool_extra(app: &AndroidApp, name: &str) -> bool {
+    // SAFETY: the activity's VM and activity, which live as long as the app
+    let (vm, activity) = match unsafe { (JavaVM::from_raw(app.vm_as_ptr().cast()), JObject::from_raw(app.activity_as_ptr().cast())) } {
+        (Ok(vm), activity) => (vm, activity),
+        _ => return false,
+    };
+    let Ok(mut env) = vm.attach_current_thread_permanently() else { return false };
+    let asked = (|| -> jni::errors::Result<bool> {
+        let intent = env.call_method(&activity, "getIntent", "()Landroid/content/Intent;", &[])?.l()?;
+        let key = env.new_string(name)?;
+        env.call_method(&intent, "getBooleanExtra", "(Ljava/lang/String;Z)Z", &[JValue::Object(&key), JValue::Bool(0)])?.z()
+    })();
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+    }
+    asked.unwrap_or(false)
+}
+
+/// the graphics self-test in place of a game: the window, the engine's own
+/// shaders through the driver, a triangle drawn and read back. The report
+/// goes where the launcher reads it, and the process ends with it.
+fn selftest(app: AndroidApp, own: PathBuf) -> ! {
+    // the window comes with the activity's first InitWindow, and is there to
+    // ask for in its own right when that went by before this ran. With the
+    // screen off the activity has none, and the test draws offscreen
+    let mut window = None;
+    for _ in 0..50 {
+        app.poll_events(Some(Duration::from_millis(100)), |_| {});
+        window = app.native_window();
+        if window.is_some() {
+            break;
+        }
+    }
+    let report = match zakuro_gpu::selftest(window.as_ref().map(|window| window.ptr().as_ptr().cast())) {
+        Ok(report) => format!("PASS\n{report}"),
+        Err(error) => format!("FAIL\n{error}\n"),
+    };
+    // the report in the log too, for "adb logcat" when no one is looking at
+    // the launcher's dialog
+    eprintln!("selftest: {report}");
+    if let Err(error) = std::fs::write(own.join("selftest.txt"), &report) {
+        eprintln!("selftest: could not write the report, {error}");
+    }
+    std::process::exit(if report.starts_with("PASS") { 0 } else { 1 });
 }
 
 /// registers SecondScreen's native methods and has it show the second

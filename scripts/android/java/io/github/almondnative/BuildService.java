@@ -127,6 +127,11 @@ public final class BuildService extends Service {
         File out = new File(new File(getFilesDir(), "recomp"), id);
         Toolchain.deleteAll(out);
         out.mkdirs();
+        // the shaders the kit lists, before the code: they come from the
+        // game's files alone, and vertex.txt is what the renderer builds its
+        // programs from the first time it needs them
+        say(28, "collecting the shaders");
+        shaders(rom, folder);
         say(28, "recompiling " + name);
         recompile(rom, out, log);
 
@@ -147,6 +152,29 @@ public final class BuildService extends Service {
         Toolchain.deleteAll(out);
         say(100, "built " + name);
         return "Built " + name + ": play it from the list";
+    }
+
+    /**
+     * 3dsrecomp's look through the game's files for the shaders they hold,
+     * into vertex/ beside the game as the kit leaves them: vertex.txt is what
+     * the renderer makes its programs from, precache.txt the ones it hands
+     * out at the start. A game it cannot read still plays, its shaders built
+     * as it needs them, so this never fails a build.
+     */
+    private void shaders(File rom, File folder) {
+        File vertex = new File(folder, "vertex");
+        vertex.mkdirs();
+        ProcessBuilder builder = new ProcessBuilder(Toolchain.recompiler(this).getAbsolutePath(), "shaders", rom.getAbsolutePath(), vertex.getAbsolutePath());
+        builder.redirectErrorStream(true);
+        Toolchain.applyTo(builder, this);
+        try (BufferedReader lines = new BufferedReader(new InputStreamReader(builder.start().getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = lines.readLine()) != null) {
+                Log.i(TAG, "shaders: " + line);
+            }
+        } catch (IOException error) {
+            Log.w(TAG, "the shaders were not collected, they get built as the game needs them", error);
+        }
     }
 
     /** 3dsrecomp, its output read for how far along it is */

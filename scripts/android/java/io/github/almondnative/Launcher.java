@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.AlertDialog;
+import android.util.Log;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
@@ -97,6 +98,11 @@ public final class Launcher extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         unpackProfiles();
+        // asked for from adb, the game's activity not being exported: the
+        // self-test runs in it and the report shows on the way back
+        if (getIntent().getBooleanExtra("selftest", false)) {
+            selftest();
+        }
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.BLACK);
@@ -250,6 +256,39 @@ public final class Launcher extends Activity {
 
     private File codeFor(String id) {
         return new File(new File(getFilesDir(), "code"), id + ".so");
+    }
+
+    /**
+     * the graphics self-test: the game's activity with no game, which puts a
+     * GLES context on its own window, compiles the engine's shaders with the
+     * phone's driver and draws a triangle it reads back. It says how it went
+     * when it ends, from the report the activity wrote.
+     */
+    private void selftest() {
+        new File(getFilesDir(), "selftest.txt").delete();
+        Intent intent = new Intent(this, Game.class);
+        intent.putExtra("selftest", true);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // back from the self-test, whose report the game's process wrote
+        File said = new File(getFilesDir(), "selftest.txt");
+        if (!said.isFile()) {
+            return;
+        }
+        String report;
+        try {
+            report = new String(readAll(said), StandardCharsets.UTF_8).trim();
+        } catch (IOException error) {
+            report = "the self-test left no report: " + error;
+        }
+        said.delete();
+        Log.i("AlmondNative", "selftest: " + report.replace("\n", " | "));
+        new AlertDialog.Builder(this).setTitle("Graphics self-test").setMessage(report).setPositiveButton("OK", null).show();
     }
 
     private void refresh() {
@@ -437,7 +476,11 @@ public final class Launcher extends Activity {
     private void addGame() {
         new AlertDialog.Builder(this)
                 .setTitle("Add game")
-                .setItems(new String[] {"A folder the kit built", "A pack file", "Build it on this device"}, (dialog, which) -> {
+                .setItems(new String[] {"A folder the kit built", "A pack file", "Build it on this device", "Run the graphics self-test"}, (dialog, which) -> {
+                    if (which == 3) {
+                        selftest();
+                        return;
+                    }
                     if (which == 0) {
                         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), ADD_FOLDER);
                     } else {
@@ -1203,6 +1246,9 @@ public final class Launcher extends Activity {
         playShortcut(intent);
         // a build asked for while the launcher is already up
         buildShortcut(intent);
+        if (intent.getBooleanExtra("selftest", false)) {
+            selftest();
+        }
         // the installer asks the person first, through the intent it sends back
         if ("installed".equals(intent.getAction())
                 && intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0) == PackageInstaller.STATUS_PENDING_USER_ACTION) {
