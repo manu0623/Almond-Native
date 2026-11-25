@@ -111,6 +111,11 @@ public final class BuildService extends Service {
 
     /** the game's library, built and installed, its name for the person */
     private String build(Uri uri) throws Exception {
+        // an APK made without the toolchain's jni directory looks like any
+        // other, and the recompiler is only missing once a build is tried
+        if (!Toolchain.recompiler(this).isFile()) {
+            throw new IOException("this build of the app carries no compiler: " + Toolchain.recompiler(this) + " is not there");
+        }
         say(1, "unpacking the compiler");
         Toolchain.unpack(this);
 

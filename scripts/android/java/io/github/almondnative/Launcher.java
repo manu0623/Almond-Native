@@ -434,7 +434,18 @@ public final class Launcher extends Activity {
             cards.add(gcard("Files", "Title " + game.id + " · " + readable(sizeOf(game.folder)) + " · built", DIM, null));
             cards.add(gcard("Remove it", "Its code goes; its saves can stay", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else if (game.folder != null) {
-            cards.add(gcard("Build it on this device", "Its own dump, built here again", TEXT, () -> buildFrom(game.folder)));
+            // a build that did not finish leaves a folder and its copy of the
+            // dump: the games folder's own copy is taken again rather than a
+            // copy that may be short being built over
+            cards.add(gcard("Build it on this device",
+                    game.dump == null ? "Its own dump, built here again" : "Its dump in your games folder, copied and built here",
+                    TEXT, () -> {
+                        if (game.dump != null) {
+                            build(game.dump);
+                        } else {
+                            buildFrom(game.folder);
+                        }
+                    }));
             cards.add(gcard("Remove it", "Its folder and its saves go", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else {
             cards.add(gcard("Build it on this device",
@@ -961,6 +972,7 @@ public final class Launcher extends Activity {
         every.clear();
         installed.clear();
         List<Entry> here = new ArrayList<>();
+        Map<String, Uri> dumps = dumps();
         for (File volume : volumes()) {
             File[] folders = new File(volume, "games").listFiles();
             if (folders == null) {
@@ -974,7 +986,9 @@ public final class Launcher extends Activity {
                     if (!new File(folder, "icon.png").isFile()) {
                         banner(new File(folder, "game.3ds"), folder);
                     }
-                    here.add(new Entry(folder, folder.getName(), name(folder), built(folder)));
+                    // its dump in the games folder, where the folder here is
+                    // one a build left behind without its code
+                    here.add(new Entry(folder, folder.getName(), name(folder), built(folder), dumps.get(folder.getName())));
                     installed.add(folder);
                 }
             }
@@ -997,7 +1011,6 @@ public final class Launcher extends Activity {
         }
 
         List<Entry> known = new ArrayList<>();
-        Map<String, Uri> dumps = dumps();
         // one entry a title, the region the games folder has a dump of where
         // there is one: a title has a profile for each of its regions
         Map<String, Entry> byName = new LinkedHashMap<>();
