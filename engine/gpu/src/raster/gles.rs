@@ -1095,7 +1095,10 @@ struct Occlusion {
 /// a mesh's copies, the first drawn in a picture, the second and so on: a
 /// mesh the game draws in more than one place, as Super Mario 3D Land does
 /// its coins, blocks and enemies, is one mesh to the key, and one copy out
-/// of view left out all of them
+/// of view left out all of them. which copy a draw is can change from
+/// picture to picture as the camera turns, so a copy found off screen then
+/// hid the one that came into view in its place, a few pictures of popping:
+/// only a mesh drawn once a picture is culled, and its own state kept.
 #[derive(Default)]
 struct Copies {
     picture: u64,
@@ -1147,7 +1150,7 @@ impl Occlusion {
         if copies.copies.len() <= index {
             copies.copies.resize_with(index + 1, Hidden::default);
         }
-        let stable = copies.counts[0] == copies.counts[1] && copies.drawn <= copies.counts[0];
+        let stable = copies.counts == [1, 1] && copies.drawn <= 1;
         let mesh = &mut copies.copies[index];
         if !stable {
             mesh.until = 0;
