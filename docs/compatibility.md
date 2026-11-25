@@ -30,7 +30,15 @@ Where each was tried:
   since.
 
 The first start of every game is slow while it builds its shaders. That
-isn't counted against any game here.
+isn't counted against any game here. A shader a game first uses mid-play
+is built then, each program taking 100 to 250 ms, and until it is ready
+the draws that need it are left out: what they draw flickers in for a few
+frames, and a run of new ones stalls the game for a moment. **While
+shaders build → Stand-in** under Advanced draws them plainly meanwhile
+rather than leaving them out, which Android starts with on. Quitting a
+game from the menu, rather than force-stopping it, lets the launcher learn
+that run's shaders, so the next start builds them before the game wants
+them.
 
 Several games below crashed in the Mali driver's own shader compiler on
 an RX6H. From 0.5.0 such a crash names the shader in the game's
@@ -79,7 +87,7 @@ an RX6H. From 0.5.0 such a crash names the shader in the game's
 | Kirby: Planet Robobot | Starts | PC | Gets into the first levels. Since 0.4.3 it no longer asks you to accept the Service User Agreement |
 | Kirby: Triple Deluxe | Starts | PC | Gets into the first stage. Since 0.4.3 it no longer asks you to accept the Service User Agreement |
 | Kirby's Extra Epic Yarn | Slow | Reported: R36S clone, 0.4.7 | Cutscenes up to 30 fps, levels around 12. Some backgrounds glitch or go black while the camera moves. Since 0.4.7 a transformation no longer drops it to 1 fps |
-| The Legend of Zelda: A Link Between Worlds | Playable | PC, reported: RX6H, 0.2, RG DS (Android), 0.4.3, H700 (muOS), 0.4.7 | About 40 fps on the RG DS, with glitches during transitions. Good speed on an H700 with **Frame skip** at 2, where grass popped in and out: most likely the culling bug 0.5.0 fixes for Super Mario 3D Land. Some glitches in effects reported. Some R36S players find 0.4.3 slower than 0.4.0 here: if it is for you, try **Compressed alpha textures** off in the advanced settings |
+| The Legend of Zelda: A Link Between Worlds | Playable | PC, reported: RX6H, 0.2, RG DS (Android), 0.4.3, H700 (muOS), 0.4.7, AYN Thor (Android), 0.6.1 | About 40 fps on the RG DS, with glitches during transitions. Good speed on an H700 with **Frame skip** at 2, where grass popped in and out: most likely the culling bug 0.5.0 fixes for Super Mario 3D Land. Some glitches in effects reported. Some R36S players find 0.4.3 slower than 0.4.0 here: if it is for you, try **Compressed alpha textures** off in the advanced settings. On the Thor at 3.5x: 60 fps with 12 to 15% of the GPU, and a pause and flicker mid-play that were shaders first used then, built during play, gone once **While shaders build** was set to Stand-in and the run's shaders were learned |
 | The Legend of Zelda: Ocarina of Time 3D | Playable | PC, R36S sim, reported: RG DS (Android), 0.5.0 | Full speed in Link's house in the R36S sim, about half in the Kokiri Forest fly-in. Stutter reported on 0.2. Full speed and 60 fps on the RG DS on 0.5.0, shaders taking 5 to 10 seconds to build. The bottom screen's menu slips out of place for a second or two when Link gets a new item |
 | Luigi's Mansion | Starts | PC, R36S sim | The opening plays into the mansion. About 20 fps in the R36S sim, with dips. Both screens were black on 0.1 |
 | Mario & Luigi: Dream Team | Broken | Reported: 0.2 | Black screen |

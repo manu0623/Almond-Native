@@ -317,7 +317,9 @@ pub struct Advanced {
     pub background_shaders: bool,
     /// a draw into a picture a screen shows drawn with the generic stand-in
     /// while its own program builds, rather than left out: no pop-in, the
-    /// frame slower for it, which a faster GPU than the R36S's can take.
+    /// frame slower for it, which a faster GPU than the R36S's can take. on
+    /// by default on Android, whose phones and handhelds have the GPU to
+    /// spare, a shader first used mid-play taking 100 to 250 ms to build.
     pub stand_ins: bool,
     /// each shader's two halves built on their own and put together when
     /// drawn, a vertex half once whatever it meets: an experiment, OpenGL ES
@@ -363,7 +365,7 @@ impl Default for Advanced {
             prewarm: true,
             read_ahead: true,
             background_shaders: true,
-            stand_ins: false,
+            stand_ins: cfg!(target_os = "android"),
             separable_shaders: false,
             new3ds: false,
         }
