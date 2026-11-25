@@ -139,6 +139,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "almond-native-android"
+version = "0.6.1"
+dependencies = [
+ "android-activity",
+ "jni 0.21.1",
+ "log",
+ "pocket-native",
+ "zakuro-gpu",
+]
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2447,17 +2458,6 @@ dependencies = [
  "toml",
  "zakuro-common",
  "zakuro-core",
- "zakuro-gpu",
-]
-
-[[package]]
-name = "almond-native-android"
-version = "0.6.1"
-dependencies = [
- "android-activity",
- "jni 0.21.1",
- "log",
- "pocket-native",
  "zakuro-gpu",
 ]
 
