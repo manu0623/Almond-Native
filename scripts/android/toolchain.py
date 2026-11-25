@@ -17,6 +17,7 @@ Only what a build was measured to need is taken (scripts/android/README.md in
 the app's own words): a prefix of 673 MB makes a 49 MB sysroot and about
 190 MB of libraries, most of it libLLVM.
 """
+import os
 import pathlib
 import sys
 import zipfile
@@ -63,11 +64,29 @@ def main(prefix, recompiler, out):
         shutil.rmtree(sysroot)
     (sysroot / "include").mkdir(parents=True)
     (sysroot / "lib").mkdir(parents=True)
-    headers = sorted((prefix / HEADERS).glob("*.h"))
-    if not headers:
-        sys.exit(f"{prefix / HEADERS} has no C headers")
-    for header in headers:
-        (sysroot / "include" / header.name).write_bytes(header.read_bytes())
+    # every header under include, its subdirectories too: math.h includes
+    # <sys/cdefs.h>, and a flat copy of the *.h leaves the compiler without a
+    # single one of them
+    # every header under include, its subdirectories too, the ones that are
+    # symlinks to a directory among them: math.h includes <sys/cdefs.h> and
+    # linux/types.h includes <asm/types.h>, one a directory and one a symlink
+    # to the other, and a plain walk of the *.h leaves the compiler without
+    # either
+    include = prefix / HEADERS
+    copied = 0
+    for root, dirs, files in os.walk(include, followlinks=True):
+        root = pathlib.Path(root)
+        under = root.relative_to(include)
+        if under.parts and under.parts[0] == "c++":
+            dirs[:] = []
+            continue
+        for name in files:
+            target = sysroot / "include" / under / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((root / name).read_bytes())
+            copied += 1
+    if not copied:
+        sys.exit(f"{include} has no C headers")
     for name in CRT:
         source = prefix / "lib" / name
         if not source.exists():
