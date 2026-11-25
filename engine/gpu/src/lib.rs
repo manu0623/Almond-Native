@@ -1883,6 +1883,22 @@ fn external_index(gsp_offset: u32) -> Option<usize> {
     Some(byte_offset as usize / 4)
 }
 
+/// RGBA pixels written as a PNG, rows top down: the frontend's menu
+/// Screenshot, both screens as the GPU last drew them.
+pub fn screenshot_png(path: &std::path::Path, pixels: &[u8], width: i32, height: i32) {
+    let written = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(pixels)?;
+        Ok(())
+    })();
+    match written {
+        Ok(()) => log::info!("screenshot: {width}x{height} into {}", path.display()),
+        Err(error) => log::error!("could not save a screenshot: {error}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -59,6 +59,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -80,6 +81,8 @@ public final class Launcher extends Activity {
     private static final int ADD_FOLDER = 1;
     private static final int ADD_PACK = 2;
     private static final int ADD_BUILD = 3;
+    private static final int BACKUP_SAVES = 4;
+    private static final int RESTORE_SAVES = 5;
     /** a shortcut's intent: the game in the "game" extra, played at once. */
     private static final String PLAY_GAME = "io.github.almondnative.PLAY";
     /**
@@ -89,6 +92,8 @@ public final class Launcher extends Activity {
     private static final String RELEASES = "https://api.github.com/repos/CHANGE-ME/almond-native/releases/latest";
 
     private final List<File> games = new ArrayList<>();
+    /** the game a backup or a restore was picked from its long press for. */
+    private File waiting;
     private GameList list;
     private TextView empty;
     /** the game list, and the Device page in its place while Device is lit. */
@@ -119,7 +124,11 @@ public final class Launcher extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setPadding(dp(8), dp(8), dp(8), dp(8));
-        bar.addView(button("Update", v -> update()), weight());
+        // not offered when this build names no repository to ask: a button
+        // that only ever says it cannot reach GitHub is worse than none
+        if (!RELEASES.contains("CHANGE-ME")) {
+            bar.addView(button("Update", v -> update()), weight());
+        }
         bar.addView(button("Add game", v -> addGame()), weight());
         deviceButton = button("Device", v -> showDevice(devicePage.getVisibility() != View.VISIBLE));
         bar.addView(deviceButton, weight());
@@ -148,9 +157,17 @@ public final class Launcher extends Activity {
         view.setSelector(highlight(Color.TRANSPARENT));
         list = new GameList();
         view.setAdapter(list);
-        view.setOnItemClickListener((parent, row, position, id) -> play(games.get(position)));
+        view.setOnItemClickListener((parent, row, position, id) -> {
+            File folder = games.get(position);
+            // one whose code is not on this device would only fail to start
+            if (!built(folder)) {
+                Toast.makeText(this, "Its code is not built on this device any more: add the game again", Toast.LENGTH_LONG).show();
+                return;
+            }
+            play(folder);
+        });
         view.setOnItemLongClickListener((parent, row, position, id) -> {
-            pin(games.get(position));
+            gameMenu(games.get(position));
             return true;
         });
         page.addView(view, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -158,6 +175,7 @@ public final class Launcher extends Activity {
         refresh();
         playShortcut(getIntent());
         buildShortcut(getIntent());
+        viewed(getIntent());
     }
 
     /**
@@ -207,6 +225,273 @@ public final class Launcher extends Activity {
             return;
         }
         shortcuts.requestPinShortcut(shortcut(folder), null);
+    }
+
+    /**
+     * a game's long press: playing it, putting it on the home screen, its
+     * saves out and back, its shaders rebuilt, and taking it away again —
+     * what a file manager on the phone was needed for.
+     */
+    private void gameMenu(File folder) {
+        String[] items = {
+            built(folder) ? "Play" : "Not built on this device: add it again",
+            "Play with its menu open",
+            "Put it on the home screen",
+            "Back up its saves",
+            "Restore its saves",
+            "Rebuild its shaders",
+            "Remove it"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(name(folder))
+                .setItems(items, (dialog, which) -> {
+                    if (which == 0 || which == 1) {
+                        if (built(folder)) {
+                            play(folder, which == 1);
+                        } else {
+                            Toast.makeText(this, "Add the game again first: its code is not on this device", Toast.LENGTH_LONG).show();
+                        }
+                    } else if (which == 2) {
+                        pin(folder);
+                    } else if (which == 3) {
+                        waiting = folder;
+                        Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                                .addCategory(Intent.CATEGORY_OPENABLE)
+                                .setType("application/zip")
+                                .putExtra(Intent.EXTRA_TITLE, name(folder).replaceAll("[^A-Za-z0-9 ._-]", "") + " saves.zip");
+                        startActivityForResult(save, BACKUP_SAVES);
+                    } else if (which == 4) {
+                        waiting = folder;
+                        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+                        startActivityForResult(pick, RESTORE_SAVES);
+                    } else if (which == 5) {
+                        rebuildShaders(folder);
+                    } else if (which == 6) {
+                        removeGame(folder);
+                    }
+                })
+                .show();
+    }
+
+    /** a game taken away: its saves kept for adding it again, or all of it. */
+    private void removeGame(File folder) {
+        new AlertDialog.Builder(this)
+                .setTitle("Remove " + name(folder) + "?")
+                .setMessage("Keeping its saves leaves the data/ folder, which adding the game again finds. Its built code goes either way.")
+                .setPositiveButton("Keep its saves", (dialog, which) -> inBackground("Removing", progress -> {
+                    deleteGame(folder, true);
+                    return "Removed " + name(folder) + ", its saves kept";
+                }))
+                .setNeutralButton("Remove everything", (dialog, which) -> new AlertDialog.Builder(this)
+                        .setMessage("Its saves go too: everything saved in the game so far.")
+                        .setPositiveButton("Remove everything", (again, confirmed) -> inBackground("Removing", progress -> {
+                            deleteGame(folder, false);
+                            return "Removed " + name(folder);
+                        }))
+                        .setNegativeButton("Cancel", null)
+                        .show())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void deleteGame(File folder, boolean keepSaves) {
+        File code = codeFor(folder.getName());
+        code.setWritable(true);
+        code.delete();
+        if (!keepSaves) {
+            deleteAll(folder);
+            return;
+        }
+        File[] parts = folder.listFiles();
+        if (parts != null) {
+            for (File part : parts) {
+                // data/ holds the saves, and stays for the game's next add
+                if (!"data".equals(part.getName())) {
+                    deleteAll(part);
+                }
+            }
+        }
+    }
+
+    /**
+     * the programs the engine builds before a start, built again from the ones
+     * a run learned: for a game learned when those programs were other ones.
+     */
+    private void rebuildShaders(File folder) {
+        File learned = new File(new File(folder, "data"), "shaders.txt");
+        if (!learned.isFile()) {
+            Toast.makeText(this, "It has not learned any shaders yet: play it once", Toast.LENGTH_LONG).show();
+            return;
+        }
+        new File(new File(folder, "vertex"), "precache.txt").delete();
+        try {
+            startForegroundService(new Intent(this, BuildService.class)
+                    .setAction(BuildService.ACTION_SHADERS)
+                    .putExtra(BuildService.EXTRA_GAME, folder.getAbsolutePath()));
+            Toast.makeText(this, "Rebuilding its shaders: the next start builds them all first", Toast.LENGTH_LONG).show();
+        } catch (RuntimeException error) {
+            Toast.makeText(this, "Could not start that: " + error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** a game's saves, data/ as it is, into the zip the person picked. */
+    private int backupSaves(File folder, Uri to, Progress progress) throws IOException {
+        List<File> files = new ArrayList<>();
+        collect(new File(folder, "data"), files);
+        long total = 0;
+        for (File file : files) {
+            total += file.length();
+        }
+        OutputStream raw = getContentResolver().openOutputStream(to);
+        if (raw == null) {
+            throw new IOException("could not open it");
+        }
+        long done = 0;
+        try (ZipOutputStream zip = new ZipOutputStream(raw)) {
+            byte[] buffer = new byte[1 << 20];
+            for (File file : files) {
+                // data/log.txt and so on, as the game's folder holds it
+                zip.putNextEntry(new ZipEntry(file.getPath().substring(folder.getPath().length() + 1).replace('\\', '/')));
+                try (InputStream in = new FileInputStream(file)) {
+                    int read;
+                    while ((read = in.read(buffer)) > 0) {
+                        zip.write(buffer, 0, read);
+                        done += read;
+                    }
+                }
+                zip.closeEntry();
+                if (progress != null) {
+                    progress.at("Backing up the saves", done, total);
+                }
+            }
+        }
+        return files.size();
+    }
+
+    /** every file under a folder. */
+    private static void collect(File folder, List<File> found) {
+        File[] parts = folder.listFiles();
+        if (parts == null) {
+            return;
+        }
+        for (File part : parts) {
+            if (part.isDirectory()) {
+                collect(part, found);
+            } else {
+                found.add(part);
+            }
+        }
+    }
+
+    /** the saves in the zip the person picked, into the game's data/. */
+    private int restoreSaves(File folder, Uri from, Progress progress) throws IOException {
+        InputStream raw = getContentResolver().openInputStream(from);
+        if (raw == null) {
+            throw new IOException("could not open it");
+        }
+        int count = 0;
+        long done = 0;
+        try (ZipInputStream zip = new ZipInputStream(raw)) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                String name = entry.getName().replace('\\', '/');
+                // only the game's own saves, never a path that climbs out
+                if (entry.isDirectory() || !name.startsWith("data/") || name.contains("../")) {
+                    continue;
+                }
+                File to = new File(folder, name);
+                to.getParentFile().mkdirs();
+                copy(zip, to, "the saves", entry.getSize(), progress);
+                done += Math.max(0, entry.getSize());
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** a pack file shared to this app from a file manager or a chat app. */
+    private void viewed(Intent intent) {
+        if (!Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null) {
+            return;
+        }
+        Uri uri = intent.getData();
+        setIntent(new Intent());
+        inBackground("Adding", progress -> withCleanUp(() -> added(importPack(uri, progress))));
+    }
+
+    /** when the game process started, while one plays. */
+    private File playingSince() {
+        return new File(getFilesDir(), "playing-since");
+    }
+
+    /** where a game's seconds played and when it was last started are kept. */
+    private File playedFile(File folder) {
+        File dir = new File(getFilesDir(), "played");
+        dir.mkdirs();
+        return new File(dir, folder.getName());
+    }
+
+    /** a game's seconds played and when it was last started, 0 for never. */
+    private long[] played(File folder) {
+        try {
+            String[] parts = new String(readAll(playedFile(folder)), StandardCharsets.UTF_8).trim().split("\\s+");
+            return new long[] {Long.parseLong(parts[0]), parts.length > 1 ? Long.parseLong(parts[1]) : 0};
+        } catch (IOException | RuntimeException never) {
+            return new long[] {0, 0};
+        }
+    }
+
+    /**
+     * a game that ended while the launcher was away, its time counted now: the
+     * seconds since it started, but for a day at most, as one left running in
+     * the background overnight was not played for all of it.
+     */
+    private boolean settlePlaytime() {
+        File since = playingSince();
+        if (!since.isFile() || gameProcess() != 0) {
+            return false;
+        }
+        long started;
+        String game;
+        try {
+            started = Long.parseLong(new String(readAll(since), StandardCharsets.UTF_8).trim());
+            game = new String(readAll(new File(getFilesDir(), "playing")), StandardCharsets.UTF_8).trim();
+        } catch (IOException | RuntimeException gone) {
+            since.delete();
+            return false;
+        }
+        File folder = new File(game);
+        long seconds = Math.min(Math.max(0, (System.currentTimeMillis() - started) / 1000), 24 * 3600);
+        if (folder.isDirectory() && seconds > 0) {
+            long[] had = played(folder);
+            try (FileOutputStream out = new FileOutputStream(playedFile(folder))) {
+                out.write((had[0] + seconds + " " + Math.max(started, had[1])).getBytes(StandardCharsets.UTF_8));
+            } catch (IOException ignored) {
+            }
+        }
+        since.delete();
+        return true;
+    }
+
+    /** "Played 12h 40m · yesterday", or "Never played". */
+    private String said(File folder) {
+        long[] played = played(folder);
+        if (played[1] == 0) {
+            return "Never played";
+        }
+        String time = played[0] >= 3600 ? (played[0] / 3600) + "h " + (played[0] % 3600 / 60) + "m"
+                : played[0] >= 60 ? (played[0] / 60) + "m" : played[0] + "s";
+        return "Played " + time + " · " + when(played[1]);
+    }
+
+    private static String when(long at) {
+        long days = (System.currentTimeMillis() - at) / (24 * 3600 * 1000L);
+        return days <= 0 ? "today" : days == 1 ? "yesterday" : days < 30 ? days + " days ago" : (days / 30) + " months ago";
+    }
+
+    /** whether the game's code was built onto this device. */
+    private boolean built(File folder) {
+        return codeFor(folder.getName()).isFile();
     }
 
     private int dp(int value) {
@@ -290,6 +575,10 @@ public final class Launcher extends Activity {
         told("The game did not start", "last-error.txt");
         told("Building a game", "build-result.txt");
         prepareShaders();
+        // a game that ended while the launcher was away, its time counted now
+        if (settlePlaytime()) {
+            refresh();
+        }
     }
 
     /**
@@ -350,7 +639,16 @@ public final class Launcher extends Activity {
                 }
             }
         }
-        Collections.sort(games, (a, b) -> name(a).compareToIgnoreCase(name(b)));
+        String order = prefs().getString("order", "name");
+        Collections.sort(games, (a, b) -> {
+            if ("recent".equals(order)) {
+                long was = played(a)[1], is = played(b)[1];
+                if (was != is) {
+                    return Long.compare(is, was);
+                }
+            }
+            return name(a).compareToIgnoreCase(name(b));
+        });
         empty.setVisibility(games.isEmpty() ? View.VISIBLE : View.GONE);
         list.notifyDataSetChanged();
         // the games as the app's shortcuts too, for launchers that list them
@@ -432,12 +730,29 @@ public final class Launcher extends Activity {
                 icon.setImageBitmap(bitmap);
             }
             row.addView(icon, new LinearLayout.LayoutParams(dp(48), dp(48)));
+            // the name, and under it how long it was played and when last
+            LinearLayout column = new LinearLayout(Launcher.this);
+            column.setOrientation(LinearLayout.VERTICAL);
             TextView text = new TextView(Launcher.this);
             text.setText(name(folder));
-            text.setTextColor(Color.WHITE);
             text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
             text.setPadding(dp(16), 0, 0, 0);
-            row.addView(text);
+            TextView under = new TextView(Launcher.this);
+            under.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            under.setPadding(dp(16), dp(2), 0, 0);
+            if (built(folder)) {
+                text.setTextColor(Color.WHITE);
+                under.setText(said(folder));
+                under.setTextColor(0xFF8A8A8A);
+            } else {
+                // nothing to play until its code is on this device again
+                text.setTextColor(0xFF9A9A9A);
+                under.setText("not built on this device: add the game again");
+                under.setTextColor(0xFFFFC45A);
+            }
+            column.addView(text);
+            column.addView(under);
+            row.addView(column);
             return row;
         }
     }
@@ -447,6 +762,10 @@ public final class Launcher extends Activity {
      * once that one is ended, after asking.
      */
     private void play(File folder) {
+        play(folder, false);
+    }
+
+    private void play(File folder, boolean menu) {
         int pid = gameProcess();
         String running = null;
         try {
@@ -455,16 +774,17 @@ public final class Launcher extends Activity {
             // a game process that never said which game, ended below
         }
         if (pid == 0) {
-            start(folder, true);
+            start(folder, true, menu);
         } else if (folder.getAbsolutePath().equals(running)) {
-            start(folder, false);
+            start(folder, false, menu);
         } else {
             String other = running == null ? "Another game" : name(new File(running));
             new AlertDialog.Builder(this)
                     .setMessage(other + " is still running. End it and play " + name(folder) + "? Anything not saved in it is lost.")
                     .setPositiveButton("End it", (dialog, which) -> {
                         android.os.Process.killProcess(pid);
-                        playAgain(folder);
+                        settlePlaytime();
+                        playAgain(folder, menu);
                     })
                     .setNegativeButton("Cancel", null)
                     .show();
@@ -489,9 +809,25 @@ public final class Launcher extends Activity {
      * game before is cleared, else the one held in the background comes back.
      */
     private void start(File folder, boolean fresh) {
+        start(folder, fresh, false);
+    }
+
+    /**
+     * a game started, its menu up first when asked for: the resolution and
+     * the rest are reached without walking into the game to press Menu.
+     */
+    private void start(File folder, boolean fresh, boolean menu) {
+        // when this game started, which onResume turns into its time played
+        try (FileOutputStream out = new FileOutputStream(playingSince())) {
+            out.write(String.valueOf(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+        }
         Intent intent = new Intent(this, Game.class);
         intent.putExtra("game", folder.getAbsolutePath());
         intent.putExtra("orientation", prefs().getString("orientation", "auto"));
+        if (menu) {
+            intent.putExtra("menu", true);
+        }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | (fresh ? Intent.FLAG_ACTIVITY_CLEAR_TASK : 0));
         ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
@@ -504,6 +840,10 @@ public final class Launcher extends Activity {
      * into the old process as it ends.
      */
     private void playAgain(File folder) {
+        playAgain(folder, false);
+    }
+
+    private void playAgain(File folder, boolean menu) {
         new Thread(() -> {
             for (int tries = 0; tries < 40 && gameProcess() != 0; tries++) {
                 try {
@@ -512,7 +852,7 @@ public final class Launcher extends Activity {
                     return;
                 }
             }
-            runOnUiThread(() -> start(folder, true));
+            runOnUiThread(() -> start(folder, true, menu));
         }).start();
     }
 
@@ -551,6 +891,14 @@ public final class Launcher extends Activity {
             inBackground("Adding", progress -> withCleanUp(() -> added(importPack(uri, progress))));
         } else if (request == ADD_BUILD) {
             build(uri);
+        } else if (request == BACKUP_SAVES && waiting != null) {
+            File folder = waiting;
+            waiting = null;
+            inBackground("Backing up", progress -> "Backed up " + backupSaves(folder, uri, progress) + " files of saves");
+        } else if (request == RESTORE_SAVES && waiting != null) {
+            File folder = waiting;
+            waiting = null;
+            inBackground("Restoring", progress -> "Restored " + restoreSaves(folder, uri, progress) + " files of saves");
         }
     }
 
@@ -1051,6 +1399,13 @@ public final class Launcher extends Activity {
                         }
                     }
                 }));
+        String[] orders = {"name", "recent"};
+        page.addView(choice("Game list", "Recent first puts the game played last on top, with how long each was played under its name.",
+                new String[] {"By name", "Recent first"}, indexOf(orders, prefs().getString("order", "name")), true,
+                which -> {
+                    prefs().edit().putString("order", orders[which]).apply();
+                    refresh();
+                }));
         TextView note = new TextView(this);
         note.setText("Changes take effect the next time a game starts. More settings are in the menu in game, the Menu button or Back, where Edit touch controls moves and sizes them.\n\nAlmond Native " + version());
         note.setTextColor(0xFF777777);
@@ -1291,6 +1646,7 @@ public final class Launcher extends Activity {
         playShortcut(intent);
         // a build asked for while the launcher is already up
         buildShortcut(intent);
+        viewed(intent);
         if (intent.getBooleanExtra("selftest", false)) {
             selftest();
         }

@@ -215,6 +215,12 @@ pub fn run(mut args: Vec<String>) {
 
     let font = Font::load();
     let mut menu = Menu::default();
+    // the launcher's "Play with its menu open": the settings are reached
+    // before the game is rather than by walking into it
+    if std::env::var_os("ZAKURO_OPEN_MENU").is_some() {
+        menu.show();
+        log::info!("switch: its menu open from the start, the launcher asked for it");
+    }
     let mut overlay: Option<Arc<Overlay>> = None;
     let mut controls = touch::Controls::load();
     // whether the menu went up, and with which of the touch controls' overlays
@@ -229,6 +235,14 @@ pub fn run(mut args: Vec<String>) {
     let mut note: Option<(&str, Instant)> = None;
     let mut fn_alone = false;
     let mut exit_code = 0;
+    // Screenshot picked in the menu, its picture taken of the next frame the
+    // game puts up: the menu covers the screens, so they are read once it is
+    // back to the game
+    let mut shot_wanted = false;
+    // when the shot was asked for: a moment after the menu closes, the game
+    // drawing again by then, as the picture it shows just after is the black
+    // one its pause left
+    let mut shot_at: Option<Instant> = None;
 
     let mut frame = Duration::from_secs_f64(1.0 / 60.0);
     let mut next = Instant::now();
@@ -457,6 +471,16 @@ pub fn run(mut args: Vec<String>) {
                     continue;
                 }
                 Action::Quit => break,
+                Action::Screenshot => {
+                    // the menu goes, as Resume does, its picture kept from the
+                    // game's next frame up
+                    (shot_wanted, menu.open) = (true, false);
+                    shot_at = Some(Instant::now());
+                    settings::save(&settings_path, &settings);
+                    (game.layout, game.swapped) = (Some(settings.layout), Some(settings.swapped));
+                    settings::save(&game_path, &game);
+                    (overlay, status, next) = (None, None, Instant::now());
+                }
             }
             if menu.open {
                 let drawn_controls = controls_overlay.as_ref().map(|overlay| Arc::as_ptr(overlay) as usize);
@@ -682,6 +706,14 @@ pub fn run(mut args: Vec<String>) {
             };
             let pointer = areas[1].filter(|_| cursor_shown).map(|[x, y, width, height]| (x + (cursor.0 * width as f32 / 320.0) as i32, y + (cursor.1 * height as f32 / 240.0) as i32));
             system.present_panel(areas, pointer, overlays(&overlay, &controls_overlay), settings.smooth, interpolating);
+            if shot_wanted && shot_at.is_some_and(|at| at.elapsed() > Duration::from_millis(1500)) {
+                match screenshot(&mut system) {
+                    Some(file) => log::info!("screenshot: both screens into {}", file.display()),
+                    None => log::warn!("screenshot: the game has drawn nothing yet"),
+                }
+                note = Some(("Saved a screenshot", Instant::now()));
+                shot_wanted = false;
+            }
         }
 
         if let Some(limit) = slow {
@@ -809,6 +841,44 @@ fn prepare_shaders(system: &mut System, font: &Font, settings: &Settings, pad: &
 
 fn overlays(overlay: &Option<Arc<Overlay>>, controls: &Option<Arc<Overlay>>) -> Vec<Arc<Overlay>> {
     overlay.iter().chain(controls).cloned().collect()
+}
+
+/// both screens into a PNG beside the game's saves, as the panel puts them
+/// up: what the menu's Screenshot keeps, for a note on how a game draws or
+/// for showing someone what a glitch looks like. The panel writes it as it
+/// draws the next picture, the screens' own memory holding black once the
+/// GPU has drawn them.
+fn screenshot(system: &mut System) -> Option<PathBuf> {
+    // the top screen over the bottom one, centred, the console's own 400 by
+    // 240 each: the pictures the panel is shown from, synced out of the GPU
+    let screens: Vec<(Vec<u8>, i32, i32)> = [zakuro_common::Screen::Top, zakuro_common::Screen::Bottom]
+        .into_iter()
+        .map(|screen| (system.read_screen(screen), screen.width() as i32, screen.height() as i32))
+        .collect();
+    let width = screens.iter().map(|screen| screen.1).max()?;
+    let height: i32 = screens.iter().map(|screen| screen.2).sum();
+    let mut pixels = vec![0u8; (width * height) as usize * 4];
+    let mut above = 0;
+    for (data, screen_width, screen_height) in &screens {
+        let left = (width - screen_width) / 2;
+        let line = *screen_width as usize * 4;
+        for y in 0..*screen_height {
+            let from = (y * screen_width) as usize * 4;
+            let to = ((above + y) * width + left) as usize * 4;
+            pixels[to..to + line].copy_from_slice(&data[from..from + line]);
+        }
+        above += screen_height;
+    }
+    let folder = std::env::var_os("ZAKURO_DATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let mut file = folder.join("screenshot.png");
+    for count in 2.. {
+        if !file.exists() {
+            break;
+        }
+        file = folder.join(format!("screenshot-{count}.png"));
+    }
+    zakuro_gpu::screenshot_png(&file, &pixels, width, height);
+    Some(file)
 }
 
 /// what a program around the frontend does with the exit code as a game

@@ -51,6 +51,7 @@ enum Field {
     Advanced,
     Reset,
     Quit,
+    Screenshot,
     Toggle(usize),
     FrameSkip,
     Language,
@@ -119,7 +120,7 @@ enum Page {
 impl Field {
     /// picked with A rather than changed with left and right.
     fn action(self) -> bool {
-        matches!(self, Field::Resume | Field::Advanced | Field::Reset | Field::Quit | Field::Restart | Field::Compatible | Field::Defaults | Field::Back | Field::EditControls | Field::Name | Field::Mapping | Field::Unmap)
+        matches!(self, Field::Resume | Field::Advanced | Field::Reset | Field::Quit | Field::Screenshot | Field::Restart | Field::Compatible | Field::Defaults | Field::Back | Field::EditControls | Field::Name | Field::Mapping | Field::Unmap)
     }
 }
 
@@ -131,6 +132,8 @@ pub enum Action {
     Resume,
     Reset,
     Quit,
+    /// both screens into a PNG beside the game's saves.
+    Screenshot,
     /// the touch controls to move and size.
     EditControls,
     /// the owner's name to type.
@@ -188,7 +191,7 @@ fn sections(page: Page, profile: &Profile) -> Vec<(&'static str, Vec<Field>)> {
             ("Performance", only(vec![Field::FrameCap, Field::Power])),
             ("This game", (0..profile.options.len()).map(Field::Option).collect()),
             ("Controls", only(vec![Field::TouchSpeed, Field::Cursor, Field::Buttons, Field::LeftStick, Field::Dpad, Field::RightStick, Field::ReverseTiltX, Field::ReverseTiltY, Field::TouchControls, Field::EditControls, Field::Mapping])),
-            ("Game", vec![Field::Resume, Field::Advanced, Field::Reset, Field::Quit]),
+            ("Game", vec![Field::Resume, Field::Advanced, Field::Reset, Field::Screenshot, Field::Quit]),
         ],
         Page::Advanced => vec![
             ("Applies at once", vec![Field::Toggle(0), Field::Toggle(29), Field::Toggle(30), Field::FrameSkip]),
@@ -285,6 +288,7 @@ fn label(field: Field, settings: &Settings, game: &GameSettings, profile: &Profi
         Field::Advanced => ("Advanced settings", "→".into()),
         Field::Reset => ("Reset", String::new()),
         Field::Quit => ("Quit", String::new()),
+        Field::Screenshot => ("Screenshot", "→".into()),
         Field::Toggle(index) => {
             let (name, setting, values, _) = TOGGLES[index];
             let mut advanced = Advanced::of(game, profile);
@@ -372,7 +376,7 @@ fn change(field: Field, by: isize, settings: &mut Settings, game: &mut GameSetti
             };
         }
         Field::Unmap => game.buttons.clear(),
-        Field::Resume | Field::Advanced | Field::Reset | Field::Quit | Field::Restart | Field::Back | Field::EditControls | Field::Name | Field::Mapping => {}
+        Field::Resume | Field::Advanced | Field::Reset | Field::Quit | Field::Screenshot | Field::Restart | Field::Back | Field::EditControls | Field::Name | Field::Mapping => {}
     }
 }
 
@@ -407,6 +411,7 @@ fn help(field: Field, profile: &Profile) -> &str {
         Field::Advanced => "This game's switches for speed and for games that do not run right, each with a hint.",
         Field::Reset => "Starts the game again from the beginning.",
         Field::Quit => if cfg!(target_os = "android") { "Back to the game list." } else { "Back to EmulationStation." },
+        Field::Screenshot => "Both screens into a PNG beside the game's saves, for a note on how it draws.",
         Field::Toggle(index) => TOGGLES[index].3,
         Field::FrameSkip => "The most pictures left out in a row while the game is behind. Off is smoother and slower.",
         Field::Language => "The console language the game is told. Games without it pick one of their own.",
@@ -539,6 +544,7 @@ impl Menu {
             Field::Reset | Field::Restart => Action::Reset,
             Field::Name => Action::EditName,
             Field::Quit => Action::Quit,
+        Field::Screenshot => Action::Screenshot,
             field => {
                 change(field, 1, settings, game, profile);
                 Action::Changed

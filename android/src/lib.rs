@@ -52,6 +52,11 @@ fn android_main(app: AndroidApp) {
     let _ = std::fs::create_dir_all(&data);
     let _ = std::fs::create_dir_all(own.join("config"));
     set_up(&own, &folder, &data);
+    // "Play with its menu open" from the launcher's long press: the settings
+    // come up before the game does, instead of by walking into it
+    if bool_extra(&app, "menu") {
+        std::env::set_var("ZAKURO_OPEN_MENU", "1");
+    }
     std::panic::set_hook(Box::new(|info| {
         log::error!("{info}");
         let _ = std::fs::write("data/panic.txt", info.to_string());
