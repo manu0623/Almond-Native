@@ -55,9 +55,36 @@ impl HostArchive {
         HostArchive { root: root.into() }
     }
 
-    /// the running title's own save data.
+    /// the running title's own save data, adopting a save an older layout left at the base
+    /// before the title reads it.
     pub fn save_data(base: &Path, program_id: u64) -> HostArchive {
-        HostArchive::at(base.join("savedata").join(format!("{program_id:016X}")))
+        let archive = HostArchive::at(base.join("savedata").join(format!("{program_id:016X}")));
+        archive.adopt_legacy(base);
+        archive
+    }
+
+    /// Azahar and Citra keep a title's save as `<base>/<8 hex save id>/` with `<id>.metadata`
+    /// beside it holding the same format this archive records, and that is the shape Argosy
+    /// zips and places at a title's user folder. Almond names the archive after the program
+    /// instead, so a save found that way is moved into `savedata/` the first time the title
+    /// opens it, and its metadata becomes the `.format`: one layout on the card after that,
+    /// whichever emulator wrote it.
+    fn adopt_legacy(&self, base: &Path) {
+        if self.exists() || !base.is_dir() {
+            return;
+        }
+        let Some((dir, metadata)) = legacy_save(base) else {
+            return;
+        };
+        let Some(parent) = self.root.parent() else {
+            return;
+        };
+        if std::fs::create_dir_all(parent).is_err() || std::fs::rename(&dir, &self.root).is_err() {
+            log::warn!("fs: could not take over the save at {dir:?}");
+            return;
+        }
+        let _ = std::fs::rename(&metadata, self.format_path());
+        log::info!("fs: adopted the save at {dir:?} as {:?}", self.root);
     }
 
     /// extra data, which titles keep outside their save, caches, downloaded
@@ -251,6 +278,30 @@ impl HostArchive {
     }
 }
 
+/// a save an older layout left directly in `base`: a folder named with an 8 hex save id that
+/// has the `<id>.metadata` describing its format beside it. The newest one wins, and every
+/// other folder there (extdata, cec, a name that is not a save id) is none of this one's
+/// business.
+fn legacy_save(base: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut found: Vec<(PathBuf, PathBuf, std::time::SystemTime)> = std::fs::read_dir(base)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let is_save_id = name.len() == 8 && name.chars().all(|c| c.is_ascii_hexdigit());
+            if !is_save_id || !entry.path().is_dir() {
+                return None;
+            }
+            let metadata = base.join(format!("{name}.metadata"));
+            FormatInfo::decode(&std::fs::read(&metadata).ok()?)?;
+            let modified = std::fs::metadata(&metadata).ok()?.modified().ok()?;
+            Some((entry.path(), metadata, modified))
+        })
+        .collect();
+    found.sort_by_key(|(_, _, modified)| *modified);
+    found.pop().map(|(dir, metadata, _)| (dir, metadata))
+}
+
 /// reads up to buffer.len() bytes at offset, returning how many were
 /// there to read.
 pub fn read_at(path: &Path, offset: u64, buffer: &mut [u8]) -> usize {
@@ -381,6 +432,61 @@ mod tests {
         assert_eq!(listing, vec![DirectoryEntry { name: "data.bin".into(), is_directory: false, size: 6 }]);
         assert_eq!(archive.delete_directory("/dir", false), Err(errors::FS_DIRECTORY_NOT_EMPTY));
         archive.delete_directory("/dir", true).unwrap();
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_save_an_older_layout_left_at_the_base_is_adopted() {
+        let base = scratch("adopt");
+        std::fs::create_dir_all(&base).unwrap();
+        let legacy = base.join("00000001");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("SaveCommon.bin"), b"common").unwrap();
+        let info = FormatInfo { total_size: 0x40_000, directories: 1, files: 4, duplicate_data: true };
+        std::fs::write(base.join("00000001.metadata"), info.encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert!(archive.exists(), "the save sits where the title reads it now");
+        assert_eq!(archive.format_info(), Some(info), "its metadata became the format");
+        assert_eq!(std::fs::read(archive.resolve("SaveCommon.bin").unwrap()).unwrap(), b"common");
+        assert!(!legacy.exists(), "the older layout is gone");
+        assert!(!base.join("00000001.metadata").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_archive_the_title_names_wins_over_a_save_left_at_the_base() {
+        let base = scratch("adopt-keeps");
+        let own = base.join("savedata").join("00040000000EC300");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(
+            base.join("savedata").join("00040000000EC300.format"),
+            FormatInfo::default().encode(),
+        )
+        .unwrap();
+        let legacy = base.join("00000001");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(base.join("00000001.metadata"), FormatInfo::default().encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert!(archive.exists());
+        assert!(legacy.exists(), "a save the title already has is not touched");
+        assert!(base.join("00000001.metadata").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn folders_at_the_base_that_are_not_a_save_are_left_alone() {
+        let base = scratch("adopt-ignores");
+        std::fs::create_dir_all(base.join("extdata").join("shared")).unwrap();
+        std::fs::create_dir_all(base.join("cec")).unwrap();
+        std::fs::write(base.join("cec/MBoxList____"), b"mail").unwrap();
+        std::fs::write(base.join("extdata.metadata"), FormatInfo::default().encode()).unwrap();
+
+        let archive = HostArchive::save_data(&base, 0x0004_0000_000E_C300);
+        assert!(!archive.exists(), "nothing there is a save");
+        assert!(base.join("extdata").exists());
+        assert!(base.join("cec/MBoxList____").exists());
         let _ = std::fs::remove_dir_all(base);
     }
 
