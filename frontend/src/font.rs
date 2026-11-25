@@ -131,6 +131,23 @@ impl<'a> Canvas<'a> {
         quad(&mut self.boxes, area, [0.0, 0.0, 1.0, 1.0], color);
     }
 
+    /// a rectangle with rounded corners, a band through its middle with a
+    /// disc in each corner: for the panels the menu is made of, square corners
+    /// looking like a terminal's. The discs overlap the band a little, so the
+    /// color wants to be opaque, which every panel's is.
+    pub fn rounded(&mut self, [left, top, right, bottom]: [f32; 4], radius: f32, color: [u8; 4]) {
+        let radius = radius.min((right - left) / 2.0).min((bottom - top) / 2.0);
+        if radius < 1.0 {
+            return self.fill([left, top, right, bottom], color);
+        }
+        self.fill([left + radius, top, right - radius, bottom], color);
+        self.fill([left, top + radius, left + radius, bottom - radius], color);
+        self.fill([right - radius, top + radius, right, bottom - radius], color);
+        for (x, y) in [(left + radius, top + radius), (right - radius, top + radius), (left + radius, bottom - radius), (right - radius, bottom - radius)] {
+            self.disc([x, y], radius, color);
+        }
+    }
+
     /// a frame width pixels wide inside the area.
     pub fn outline(&mut self, [left, top, right, bottom]: [f32; 4], width: f32, color: [u8; 4]) {
         for side in [[left, top, right, top + width], [left, bottom - width, right, bottom], [left, top, left + width, bottom], [right - width, top, right, bottom]] {

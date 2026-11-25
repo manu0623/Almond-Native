@@ -8,13 +8,22 @@ use crate::input::{A, B, DOWN, LEFT, MAPPED, RIGHT, UP};
 use crate::profile::Profile;
 use crate::settings::{Advanced, Aspect, Buttons, Cursor, Dpad, GameSettings, Key, Layout, Power, RightStick, Rotation, Settings, Speed, Stick, Stretch};
 
-const PANEL: [u8; 3] = [13, 20, 32];
-const EDGE: [u8; 3] = [40, 110, 210];
-const HEADER: [u8; 3] = [18, 40, 76];
-const HIGHLIGHT: [u8; 3] = [24, 64, 124];
-const TEXT: [u8; 3] = [230, 238, 248];
-const DIM: [u8; 3] = [130, 152, 182];
-const ACCENT: [u8; 3] = [90, 170, 255];
+// the menu's colors: one dark surface with one accent, the same ones the
+// launcher's Android side is painted with, so the app reads as one thing
+const PANEL: [u8; 3] = [13, 18, 27];
+/// the row the cursor is on.
+const HIGHLIGHT: [u8; 3] = [30, 46, 66];
+/// the line a section's name runs out into.
+const RULE: [u8; 3] = [29, 38, 52];
+/// the help's card under the list.
+const HELP: [u8; 3] = [22, 29, 39];
+const TEXT: [u8; 3] = [233, 238, 247];
+/// a row's value, quieter than its name until it is picked.
+const VALUE: [u8; 3] = [150, 168, 192];
+const DIM: [u8; 3] = [126, 142, 164];
+const ACCENT: [u8; 3] = [124, 192, 255];
+/// a section's name, a touch quieter than the accent.
+const SECTION: [u8; 3] = [98, 148, 200];
 const WARNING: [u8; 3] = [255, 196, 90];
 /// the face sizes in the font, the list's and the small one.
 const BIG: usize = 0;
@@ -555,24 +564,24 @@ impl Menu {
     pub fn draw(&self, canvas: &mut Canvas, settings: &Settings, game: &GameSettings, profile: &Profile, title: &str) {
         canvas.fill([0.0, 0.0, 640.0, 480.0], rgba([0, 0, 0], 150));
         let (x0, y0, x1, y1) = (120.0, 16.0, 520.0, 464.0);
-        canvas.fill([x0, y0, x1, y1], rgba(PANEL, 255));
-        canvas.fill([x0 + 2.0, y0 + 2.0, x1 - 2.0, y0 + 30.0], rgba(HEADER, 255));
-        canvas.outline([x0, y0, x1, y1], 2.0, rgba(EDGE, 255));
+        // one dark surface, its corners round, a short accent rail along its
+        // top edge in place of the frame it had
+        canvas.rounded([x0, y0, x1, y1], 12.0, rgba(PANEL, 255));
+        canvas.rounded([x0 + 18.0, y0 + 2.0, x0 + 74.0, y0 + 4.0], 1.0, rgba(ACCENT, 255));
+        canvas.fill([x0 + 14.0, y0 + 37.0, x1 - 14.0, y0 + 38.0], rgba(RULE, 255));
         let (heading, state) = match self.page {
             Page::Main => ("Almond Native", "Paused"),
             Page::Advanced => ("Advanced", "This game"),
             Page::Buttons => ("Buttons", "This game"),
         };
-        canvas.text(BIG, heading, x0 + 14.0, y0 + 7.0, rgba(TEXT, 255), false);
-        let mut left = x0 + 14.0 + canvas.measure(BIG, heading) + 16.0;
-        if self.page == Page::Main {
-            let version = concat!("v", env!("CARGO_PKG_VERSION"));
-            canvas.text(SMALL, version, left - 8.0, y0 + 9.0, rgba(DIM, 255), false);
-            left += canvas.measure(SMALL, version);
-        }
-        let state = format!(" · {state}");
-        let title = shortened(canvas, SMALL, title, x1 - 14.0 - left - canvas.measure(SMALL, &state));
-        canvas.text(SMALL, &format!("{title}{state}"), x1 - 14.0, y0 + 9.0, rgba(DIM, 255), true);
+        // the page's name over the game and its state, the version tucked in
+        // the corner: the name leads, everything else supports it
+        canvas.text(BIG, heading, x0 + 18.0, y0 + 7.0, rgba(TEXT, 255), false);
+        let version = concat!("v", env!("CARGO_PKG_VERSION"));
+        canvas.text(SMALL, version, x1 - 16.0, y0 + 11.0, rgba(DIM, 255), true);
+        let room = x1 - x0 - 40.0 - canvas.measure(SMALL, version);
+        let title = shortened(canvas, SMALL, title, room);
+        canvas.text(SMALL, &format!("{title} · {state}"), x0 + 18.0, y0 + 25.0, rgba(DIM, 255), false);
 
         // the headings and fields from the top of the list, scrolled to keep
         // the selected field in view
@@ -614,13 +623,22 @@ impl Menu {
             }
             let y = top + y;
             let Some((index, field)) = field else {
-                let color = if text.starts_with("Nothing") { DIM } else { ACCENT };
-                canvas.text(SMALL, text, x0 + if color == DIM { 22.0 } else { 14.0 }, y, rgba(color, 255), false);
+                // a section's name, a rule running out from it to the edge
+                if text.starts_with("Nothing") {
+                    canvas.text(SMALL, text, x0 + 24.0, y + 4.0, rgba(DIM, 255), false);
+                } else {
+                    canvas.text(SMALL, text, x0 + 22.0, y + 4.0, rgba(SECTION, 255), false);
+                    let from = x0 + 28.0 + canvas.measure(SMALL, text);
+                    canvas.fill([from, y + 8.5, x1 - 18.0, y + 9.5], rgba(RULE, 255));
+                }
                 continue;
             };
             let selected = index == self.cursor;
             if selected {
-                canvas.fill([x0 + 8.0, y - 2.0, x1 - 8.0, y + 17.0], rgba(HIGHLIGHT, 255));
+                // a soft pill with an accent bar at its edge, where the
+                // frame's flat blue block was
+                canvas.rounded([x0 + 9.0, y - 3.0, x1 - 9.0, y + ROW - 2.0], 7.0, rgba(HIGHLIGHT, 255));
+                canvas.rounded([x0 + 9.0, y + 1.0, x0 + 12.0, y + ROW - 6.0], 1.5, rgba(ACCENT, 255));
             }
             let (name, value) = label(field, settings, game, profile);
             if self.confirm == Some(index) {
@@ -629,25 +647,29 @@ impl Menu {
                     Field::Restart => "Restart? Unsaved progress is lost",
                     _ => "Reset? Unsaved progress is lost",
                 };
-                canvas.text(BIG, ask, x0 + 22.0, y, rgba(WARNING, 255), false);
+                canvas.text(BIG, ask, x0 + 24.0, y, rgba(WARNING, 255), false);
                 canvas.text(SMALL, "A again", x1 - 18.0, y + 2.0, rgba(WARNING, 255), true);
             } else {
-                canvas.text(BIG, &name, x0 + 22.0, y, rgba(TEXT, 255), false);
+                canvas.text(BIG, &name, x0 + 24.0, y, rgba(TEXT, 255), false);
                 let value = if selected && field == Field::Layout { format!("<  {value}  >") } else { value };
-                canvas.text(BIG, &value, x1 - 18.0, y, rgba(if selected { TEXT } else { ACCENT }, 255), true);
+                canvas.text(BIG, &value, x1 - 18.0, y, rgba(if selected { ACCENT } else { VALUE }, 255), true);
             }
         }
-        canvas.fill([x0 + 10.0, help_top, x1 - 10.0, help_top + 1.0], rgba([32, 48, 72], 255));
+        // the picked row's help on a card of its own, and the buttons under
+        // it, their letters in the accent so the row reads as keys
+        canvas.rounded([x0 + 8.0, help_top - 6.0, x1 - 8.0, y1 - 30.0], 8.0, rgba(HELP, 255));
         let fields: Vec<Field> = sections(self.page, profile).into_iter().flat_map(|(_, fields)| fields).collect();
         if let Some(&field) = fields.get(self.cursor) {
             let lines = wrap(canvas, SMALL, help(field, profile), x1 - x0 - 28.0);
             for (line, text) in lines.iter().take(2).enumerate() {
-                canvas.text(SMALL, text, x0 + 14.0, help_top + 6.0 + line as f32 * 16.0, rgba(DIM, 255), false);
+                canvas.text(SMALL, text, x0 + 16.0, help_top + 5.0 + line as f32 * 16.0, rgba(DIM, 255), false);
             }
         }
-        canvas.fill([x0 + 10.0, y1 - 27.0, x1 - 10.0, y1 - 26.0], rgba([32, 48, 72], 255));
-        canvas.text(SMALL, "A  select    B  back", x0 + 14.0, y1 - 21.0, rgba(DIM, 255), false);
-        canvas.text(SMALL, "Left/right  change", x1 - 14.0, y1 - 21.0, rgba(DIM, 255), true);
+        canvas.text(SMALL, "A", x0 + 16.0, y1 - 22.0, rgba(ACCENT, 255), false);
+        canvas.text(SMALL, "select", x0 + 26.0, y1 - 22.0, rgba(DIM, 255), false);
+        canvas.text(SMALL, "B", x0 + 74.0, y1 - 22.0, rgba(ACCENT, 255), false);
+        canvas.text(SMALL, "back", x0 + 84.0, y1 - 22.0, rgba(DIM, 255), false);
+        canvas.text(SMALL, "left/right  change", x1 - 16.0, y1 - 22.0, rgba(DIM, 255), true);
     }
 }
 

@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.util.Log;
 import android.app.PendingIntent;
 import android.content.Context;
@@ -15,11 +16,17 @@ import android.content.pm.PackageManager;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.database.Cursor;
+import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Outline;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Icon;
+import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.hardware.display.DisplayManager;
 import android.net.Uri;
@@ -34,6 +41,9 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ContextThemeWrapper;
+import android.view.ViewOutlineProvider;
+import android.view.Window;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.ImageView;
@@ -76,8 +86,13 @@ import org.json.JSONObject;
  * own storage, read only, where Android lets an app load code from.
  */
 public final class Launcher extends Activity {
-    private static final int GREY = 0xFF3A3A3A;
+    // the app's palette: one dark surface, cards a shade above it, and one
+    // accent, the same ones the menu in game paints itself with
+    private static final int GREY = 0xFF1B2534;
     private static final int BLUE = 0xFF2F6FE0;
+    private static final int SURFACE = 0xFF141B25;
+    private static final int TEXT = 0xFFE8EEF8;
+    private static final int DIM = 0xFF8D9DB4;
     private static final int ADD_FOLDER = 1;
     private static final int ADD_PACK = 2;
     private static final int ADD_BUILD = 3;
@@ -118,20 +133,37 @@ public final class Launcher extends Activity {
         }
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.BLACK);
+        // a soft gradient rather than flat black, the top a shade lighter
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0xFF0E141D, 0xFF070A10}));
         root.setFitsSystemWindows(true);
 
+        // the name and version at the left, the app's actions at the right
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setPadding(dp(8), dp(8), dp(8), dp(8));
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(20), dp(18), dp(14), dp(10));
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        TextView name = new TextView(this);
+        name.setText("Almond Native");
+        name.setTextColor(TEXT);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        TextView version = new TextView(this);
+        version.setText("v" + version());
+        version.setTextColor(DIM);
+        version.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        titles.addView(name);
+        titles.addView(version);
+        bar.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         // not offered when this build names no repository to ask: a button
         // that only ever says it cannot reach GitHub is worse than none
         if (!RELEASES.contains("CHANGE-ME")) {
-            bar.addView(button("Update", v -> update()), weight());
+            bar.addView(pill("Update", v -> update()));
         }
-        bar.addView(button("Add game", v -> addGame()), weight());
-        deviceButton = button("Device", v -> showDevice(devicePage.getVisibility() != View.VISIBLE));
-        bar.addView(deviceButton, weight());
+        bar.addView(pill("Add game", v -> addGame()));
+        deviceButton = pill("Device", v -> showDevice(devicePage.getVisibility() != View.VISIBLE));
+        bar.addView(deviceButton);
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         FrameLayout body = new FrameLayout(this);
@@ -145,16 +177,24 @@ public final class Launcher extends Activity {
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         empty = new TextView(this);
-        empty.setText("No games yet. Build a game with Almond Native's kit on a PC, copy its folder or pack file here, then Add game.");
-        empty.setTextColor(0xFFBBBBBB);
-        empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        empty.setPadding(dp(16), dp(24), dp(16), dp(16));
+        empty.setText("No games yet.\n\nBuild a game with Almond Native's kit on a PC, copy its folder or pack file here, then Add game.");
+        empty.setTextColor(DIM);
+        empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        empty.setLineSpacing(dp(2), 1f);
+        empty.setPadding(dp(20), dp(20), dp(20), dp(20));
+        empty.setBackground(rounded(SURFACE, dp(16)));
+        LinearLayout.LayoutParams room = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        room.setMargins(dp(12), dp(8), dp(12), dp(8));
+        empty.setLayoutParams(room);
         page.addView(empty);
 
+        // the games, as cards with air around them rather than divided rows
         ListView view = new ListView(this);
-        view.setDivider(new ColorDrawable(0xFF202020));
-        view.setDividerHeight(1);
-        view.setSelector(highlight(Color.TRANSPARENT));
+        view.setDivider(null);
+        view.setDividerHeight(0);
+        view.setSelector(new ColorDrawable(Color.TRANSPARENT));
+        view.setPadding(0, dp(4), 0, dp(12));
+        view.setClipToPadding(false);
         list = new GameList();
         view.setAdapter(list);
         view.setOnItemClickListener((parent, row, position, id) -> {
@@ -242,47 +282,90 @@ public final class Launcher extends Activity {
             "Rebuild its shaders",
             "Remove it"
         };
-        new AlertDialog.Builder(this)
-                .setTitle(name(folder))
-                .setItems(items, (dialog, which) -> {
-                    if (which == 0 || which == 1) {
-                        if (built(folder)) {
-                            play(folder, which == 1);
-                        } else {
-                            Toast.makeText(this, "Add the game again first: its code is not on this device", Toast.LENGTH_LONG).show();
-                        }
-                    } else if (which == 2) {
-                        pin(folder);
-                    } else if (which == 3) {
-                        waiting = folder;
-                        Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                                .addCategory(Intent.CATEGORY_OPENABLE)
-                                .setType("application/zip")
-                                .putExtra(Intent.EXTRA_TITLE, name(folder).replaceAll("[^A-Za-z0-9 ._-]", "") + " saves.zip");
-                        startActivityForResult(save, BACKUP_SAVES);
-                    } else if (which == 4) {
-                        waiting = folder;
-                        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
-                        startActivityForResult(pick, RESTORE_SAVES);
-                    } else if (which == 5) {
-                        rebuildShaders(folder);
-                    } else if (which == 6) {
-                        removeGame(folder);
-                    }
-                })
-                .show();
+        // a card of the app's own: the game's name, a row a line, a rule and
+        // the red line where removing the game would go
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(10), dp(12), dp(10), dp(10));
+        card.setBackground(rounded(SURFACE, dp(20)));
+        TextView heading = new TextView(this);
+        heading.setText(name(folder));
+        heading.setTextColor(TEXT);
+        heading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
+        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        heading.setPadding(dp(14), dp(6), dp(14), dp(12));
+        card.addView(heading);
+        boolean ready = built(folder);
+        for (int i = 0; i < items.length; i++) {
+            if (i == 6) {
+                View rule = new View(this);
+                rule.setBackgroundColor(0xFF1E2836);
+                LinearLayout.LayoutParams line = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+                line.setMargins(dp(14), dp(6), dp(14), dp(6));
+                card.addView(rule, line);
+            }
+            final int which = i;
+            TextView row = new TextView(this);
+            row.setText(items[i]);
+            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+            row.setTextColor(i == 6 ? 0xFFFF9A8A : (i == 0 && !ready ? DIM : TEXT));
+            row.setPadding(dp(14), dp(13), dp(14), dp(13));
+            row.setBackground(new RippleDrawable(ColorStateList.valueOf(0x24FFFFFF), null, rounded(Color.WHITE, dp(12))));
+            row.setOnClickListener(v -> {
+                dialog.dismiss();
+                gameItem(folder, which);
+            });
+            card.addView(row);
+        }
+        dialog.setContentView(card);
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.setLayout(Math.min((int) (getResources().getDisplayMetrics().widthPixels * 0.62f), dp(560)), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        dialog.show();
+    }
+
+    /** what a line of the long-press menu does. */
+    private void gameItem(File folder, int which) {
+        if (which == 0 || which == 1) {
+            if (built(folder)) {
+                play(folder, which == 1);
+            } else {
+                Toast.makeText(this, "Add the game again first: its code is not on this device", Toast.LENGTH_LONG).show();
+            }
+        } else if (which == 2) {
+            pin(folder);
+        } else if (which == 3) {
+            waiting = folder;
+            Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("application/zip")
+                    .putExtra(Intent.EXTRA_TITLE, name(folder).replaceAll("[^A-Za-z0-9 ._-]", "") + " saves.zip");
+            startActivityForResult(save, BACKUP_SAVES);
+        } else if (which == 4) {
+            waiting = folder;
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+            startActivityForResult(pick, RESTORE_SAVES);
+        } else if (which == 5) {
+            rebuildShaders(folder);
+        } else if (which == 6) {
+            removeGame(folder);
+        }
     }
 
     /** a game taken away: its saves kept for adding it again, or all of it. */
     private void removeGame(File folder) {
-        new AlertDialog.Builder(this)
+        asks()
                 .setTitle("Remove " + name(folder) + "?")
                 .setMessage("Keeping its saves leaves the data/ folder, which adding the game again finds. Its built code goes either way.")
                 .setPositiveButton("Keep its saves", (dialog, which) -> inBackground("Removing", progress -> {
                     deleteGame(folder, true);
                     return "Removed " + name(folder) + ", its saves kept";
                 }))
-                .setNeutralButton("Remove everything", (dialog, which) -> new AlertDialog.Builder(this)
+                .setNeutralButton("Remove everything", (dialog, which) -> asks()
                         .setMessage("Its saves go too: everything saved in the game so far.")
                         .setPositiveButton("Remove everything", (again, confirmed) -> inBackground("Removing", progress -> {
                             deleteGame(folder, false);
@@ -505,27 +588,54 @@ public final class Launcher extends Activity {
         return params;
     }
 
+    /** a rectangle of one colour, its corners round. */
+    private static GradientDrawable rounded(int color, float radius) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        return drawable;
+    }
+
     /** blue when pressed or picked with a pad, the colour given otherwise. */
-    private static StateListDrawable highlight(int normal) {
+    private StateListDrawable face(int normal, float radius) {
         StateListDrawable states = new StateListDrawable();
-        states.addState(new int[] {android.R.attr.state_pressed}, new ColorDrawable(BLUE));
-        states.addState(new int[] {android.R.attr.state_focused}, new ColorDrawable(BLUE));
-        states.addState(new int[] {android.R.attr.state_selected}, new ColorDrawable(BLUE));
-        states.addState(new int[] {}, new ColorDrawable(normal));
+        states.addState(new int[] {android.R.attr.state_pressed}, rounded(BLUE, radius));
+        states.addState(new int[] {android.R.attr.state_focused}, rounded(BLUE, radius));
+        states.addState(new int[] {android.R.attr.state_selected}, rounded(BLUE, radius));
+        states.addState(new int[] {}, rounded(normal, radius));
         return states;
+    }
+
+    /** a card's face: a soft gradient, round, a ripple when it is touched. */
+    private Drawable card(int top, int bottom, float radius) {
+        GradientDrawable face = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {top, bottom});
+        face.setCornerRadius(radius);
+        return new RippleDrawable(ColorStateList.valueOf(0x22FFFFFF), face, face);
     }
 
     private Button button(String label, View.OnClickListener action) {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
-        button.setTextColor(Color.WHITE);
+        button.setTextColor(TEXT);
         // on one line, the text smaller where the button is narrow
         button.setMaxLines(1);
-        button.setPadding(dp(4), 0, dp(4), 0);
-        button.setAutoSizeTextTypeUniformWithConfiguration(9, 16, 1, TypedValue.COMPLEX_UNIT_SP);
-        button.setBackground(highlight(GREY));
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        button.setAutoSizeTextTypeUniformWithConfiguration(9, 15, 1, TypedValue.COMPLEX_UNIT_SP);
+        button.setBackground(face(GREY, dp(10)));
         button.setOnClickListener(action);
+        return button;
+    }
+
+    /** a button in the header: a pill, sized to its word. */
+    private Button pill(String label, View.OnClickListener action) {
+        Button button = button(label, action);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
+        params.setMargins(dp(8), 0, 0, 0);
+        button.setLayoutParams(params);
+        button.setPadding(dp(18), 0, dp(18), 0);
+        button.setBackground(face(GREY, dp(20)));
         return button;
     }
 
@@ -622,7 +732,7 @@ public final class Launcher extends Activity {
         }
         said.delete();
         Log.i("AlmondNative", name + ": " + text.replace("\n", " | "));
-        new AlertDialog.Builder(this).setTitle(title).setMessage(text).setPositiveButton("OK", null).show();
+        asks().setTitle(title).setMessage(text).setPositiveButton("OK", null).show();
     }
 
     private void refresh() {
@@ -719,31 +829,45 @@ public final class Launcher extends Activity {
         @Override
         public View getView(int position, View reused, ViewGroup parent) {
             File folder = games.get(position);
+            // a card of its own, its corners round, a ripple as it is touched
+            FrameLayout holder = new FrameLayout(Launcher.this);
+            holder.setPadding(dp(12), dp(5), dp(12), dp(5));
             LinearLayout row = new LinearLayout(Launcher.this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(12), dp(8), dp(12), dp(8));
-            row.setMinimumHeight(dp(64));
-            ImageView icon = new ImageView(Launcher.this);
+            row.setPadding(dp(14), dp(12), dp(14), dp(12));
+            row.setMinimumHeight(dp(76));
+            row.setBackground(card(0xFF171F2B, 0xFF111823, dp(16)));
+            // the game's icon where one was read out of it, its own corners
+            // round like the card's: no gap in the card where there is none
             Bitmap bitmap = BitmapFactory.decodeFile(new File(folder, "icon.png").getPath());
             if (bitmap != null) {
+                ImageView icon = new ImageView(Launcher.this);
                 icon.setImageBitmap(bitmap);
+                icon.setClipToOutline(true);
+                icon.setOutlineProvider(new ViewOutlineProvider() {
+                    @Override
+                    public void getOutline(View view, Outline outline) {
+                        outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(14));
+                    }
+                });
+                row.addView(icon, new LinearLayout.LayoutParams(dp(56), dp(56)));
             }
-            row.addView(icon, new LinearLayout.LayoutParams(dp(48), dp(48)));
             // the name, and under it how long it was played and when last
             LinearLayout column = new LinearLayout(Launcher.this);
             column.setOrientation(LinearLayout.VERTICAL);
             TextView text = new TextView(Launcher.this);
             text.setText(name(folder));
-            text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+            text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            text.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
             text.setPadding(dp(16), 0, 0, 0);
             TextView under = new TextView(Launcher.this);
             under.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            under.setPadding(dp(16), dp(2), 0, 0);
+            under.setPadding(dp(16), dp(3), 0, 0);
             if (built(folder)) {
-                text.setTextColor(Color.WHITE);
+                text.setTextColor(TEXT);
                 under.setText(said(folder));
-                under.setTextColor(0xFF8A8A8A);
+                under.setTextColor(DIM);
             } else {
                 // nothing to play until its code is on this device again
                 text.setTextColor(0xFF9A9A9A);
@@ -752,8 +876,15 @@ public final class Launcher extends Activity {
             }
             column.addView(text);
             column.addView(under);
-            row.addView(column);
-            return row;
+            row.addView(column, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            TextView more = new TextView(Launcher.this);
+            more.setText("›");
+            more.setTextColor(0xFF5C6B80);
+            more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
+            more.setPadding(dp(10), 0, 0, 0);
+            row.addView(more);
+            holder.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            return holder;
         }
     }
 
@@ -779,7 +910,7 @@ public final class Launcher extends Activity {
             start(folder, false, menu);
         } else {
             String other = running == null ? "Another game" : name(new File(running));
-            new AlertDialog.Builder(this)
+            asks()
                     .setMessage(other + " is still running. End it and play " + name(folder) + "? Anything not saved in it is lost.")
                     .setPositiveButton("End it", (dialog, which) -> {
                         android.os.Process.killProcess(pid);
@@ -859,7 +990,7 @@ public final class Launcher extends Activity {
     // ---- adding a game
 
     private void addGame() {
-        new AlertDialog.Builder(this)
+        asks()
                 .setTitle("Add game")
                 .setItems(new String[] {"A folder the kit built", "A pack file", "Build it on this device", "Run the graphics self-test"}, (dialog, which) -> {
                     if (which == 3) {
@@ -923,7 +1054,7 @@ public final class Launcher extends Activity {
         bar.setMax(100);
         box.addView(label);
         box.addView(bar);
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Building").setView(box).setCancelable(false).show();
+        AlertDialog dialog = asks().setTitle("Building").setView(box).setCancelable(false).show();
         Handler poll = new Handler(Looper.getMainLooper());
         Runnable look = new Runnable() {
             @Override
@@ -969,7 +1100,7 @@ public final class Launcher extends Activity {
         bar.setMax(1000);
         box.addView(label);
         box.addView(bar);
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(box).setCancelable(false).show();
+        AlertDialog dialog = asks().setTitle(title).setView(box).setCancelable(false).show();
         new Thread(() -> {
             String outcome;
             try {
@@ -1358,7 +1489,20 @@ public final class Launcher extends Activity {
         }
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(0, 0, 0, dp(16));
+        page.setPadding(dp(8), dp(6), dp(8), dp(16));
+        TextView heading = new TextView(this);
+        heading.setText("Device");
+        heading.setTextColor(TEXT);
+        heading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        heading.setPadding(dp(16), dp(6), dp(16), dp(2));
+        page.addView(heading);
+        TextView subtitle = new TextView(this);
+        subtitle.setText("How games are drawn and played on this handheld.");
+        subtitle.setTextColor(DIM);
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        subtitle.setPadding(dp(16), 0, dp(16), dp(6));
+        page.addView(subtitle);
         String[] orientations = {"auto", "landscape", "portrait"};
         page.addView(choice("Orientation", "How games are held. Auto turns with the device.",
                 new String[] {"Auto", "Landscape", "Portrait"},
@@ -1408,8 +1552,10 @@ public final class Launcher extends Activity {
                 }));
         TextView note = new TextView(this);
         note.setText("Changes take effect the next time a game starts. More settings are in the menu in game, the Menu button or Back, where Edit touch controls moves and sizes them.\n\nAlmond Native " + version());
-        note.setTextColor(0xFF777777);
+        note.setTextColor(DIM);
         note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        note.setLineSpacing(dp(2), 1f);
+        note.setBackground(rounded(0xFF0F151E, dp(12)));
         note.setPadding(dp(16), dp(20), dp(16), 0);
         page.addView(note);
         devicePage.removeAllViews();
@@ -1425,18 +1571,27 @@ public final class Launcher extends Activity {
      * to a row, the one chosen lit.
      */
     private View choice(String title, String help, String[] labels, int chosen, boolean enabled, Pick pick) {
+        // a setting on a card of its own: its name, what it does, then the
+        // buttons as a segmented control
         LinearLayout section = new LinearLayout(this);
         section.setOrientation(LinearLayout.VERTICAL);
-        section.setPadding(dp(16), dp(16), dp(16), 0);
+        section.setPadding(dp(16), dp(16), dp(16), dp(16));
+        section.setBackground(rounded(SURFACE, dp(16)));
+        LinearLayout.LayoutParams shape = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        shape.setMargins(dp(12), dp(5), dp(12), dp(5));
+        section.setLayoutParams(shape);
         TextView name = new TextView(this);
         name.setText(title);
-        name.setTextColor(Color.WHITE);
-        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        name.setTextColor(TEXT);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         section.addView(name);
         TextView about = new TextView(this);
         about.setText(help);
-        about.setTextColor(0xFF999999);
+        about.setTextColor(DIM);
         about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        about.setLineSpacing(dp(2), 1f);
+        about.setPadding(0, dp(3), 0, 0);
         section.addView(about);
         List<Button> buttons = new ArrayList<>();
         // as many to a row as fit at 110dp each, the rows even
@@ -1447,7 +1602,7 @@ public final class Launcher extends Activity {
         for (int i = 0; i < labels.length; i++) {
             if (i % across == 0) {
                 row = new LinearLayout(this);
-                row.setPadding(0, dp(8), 0, 0);
+                row.setPadding(0, dp(6), 0, 0);
                 section.addView(row);
             }
             final int which = i;
@@ -1464,6 +1619,11 @@ public final class Launcher extends Activity {
             row.addView(button, weight());
         }
         return section;
+    }
+
+    /** a dialog on the app's own dark face, not the device's bright one. */
+    private AlertDialog.Builder asks() {
+        return new AlertDialog.Builder(new ContextThemeWrapper(this, android.R.style.Theme_Material_Dialog_Alert));
     }
 
     private static int indexOf(String[] values, String value) {
@@ -1597,7 +1757,7 @@ public final class Launcher extends Activity {
                     message = "Almond Native " + latest + " is out, but has no Android app yet";
                 } else {
                     String url = apk;
-                    runOnUiThread(() -> new AlertDialog.Builder(this)
+                    runOnUiThread(() -> asks()
                             .setTitle("Almond Native " + latest)
                             .setMessage("Download and install it? Your games and saves stay.")
                             .setPositiveButton("Update", (dialog, which) -> download(url))
