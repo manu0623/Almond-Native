@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.AlertDialog;
-import android.app.Dialog;
 import android.util.Log;
 import android.app.PendingIntent;
 import android.content.Context;
@@ -43,7 +42,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ContextThemeWrapper;
 import android.view.ViewOutlineProvider;
-import android.view.Window;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.ImageView;
@@ -66,7 +64,10 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -106,7 +107,20 @@ public final class Launcher extends Activity {
      */
     private static final String RELEASES = "https://api.github.com/repos/CHANGE-ME/almond-native/releases/latest";
 
-    private final List<File> games = new ArrayList<>();
+    /** every game the list can show: the ones on this device, then the titles only its profiles know. */
+    private final List<Entry> every = new ArrayList<>();
+    /** the ones the filter lets through, as the list draws them. */
+    private final List<Entry> listed = new ArrayList<>();
+    /** the games on this device, for the app's shortcuts. */
+    private final List<File> installed = new ArrayList<>();
+    /** all, ready or notbuilt: which of the chips over the list is lit. */
+    private String filter = "all";
+    /** the chips over the list, their counts kept as the games change. */
+    private final List<Button> chips = new ArrayList<>();
+    /** a game's own page, in the list's place while it is open. */
+    private ScrollView gamePage;
+    /** the game that page is about, null for none. */
+    private Entry opened;
     /** the game a backup or a restore was picked from its long press for. */
     private File waiting;
     private GameList list;
@@ -174,10 +188,13 @@ public final class Launcher extends Activity {
         devicePage = new ScrollView(this);
         devicePage.setVisibility(View.GONE);
         body.addView(devicePage);
+        gamePage = new ScrollView(this);
+        gamePage.setVisibility(View.GONE);
+        body.addView(gamePage);
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         empty = new TextView(this);
-        empty.setText("No games yet.\n\nBuild a game with Almond Native's kit on a PC, copy its folder or pack file here, then Add game.");
+        empty.setText("No games built yet.\n\nAdd one Almond Native's kit built on a PC, or build it on this device: every title the app knows is under Not built.");
         empty.setTextColor(DIM);
         empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         empty.setLineSpacing(dp(2), 1f);
@@ -187,6 +204,27 @@ public final class Launcher extends Activity {
         room.setMargins(dp(12), dp(8), dp(12), dp(8));
         empty.setLayoutParams(room);
         page.addView(empty);
+
+        // the chips over the list: every title the app knows, the ones built
+        // here, and the ones still to build, each with its count
+        LinearLayout filters = new LinearLayout(this);
+        filters.setOrientation(LinearLayout.HORIZONTAL);
+        filters.setPadding(dp(12), dp(4), dp(12), dp(2));
+        for (String key : new String[] {"all", "ready", "notbuilt"}) {
+            Button chip = button("", v -> {
+                filter = key;
+                refresh();
+            });
+            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            LinearLayout.LayoutParams fit = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
+            fit.setMargins(0, 0, dp(8), 0);
+            chip.setLayoutParams(fit);
+            chip.setPadding(dp(16), 0, dp(16), 0);
+            chip.setBackground(face(GREY, dp(18)));
+            chips.add(chip);
+            filters.addView(chip);
+        }
+        page.addView(filters);
 
         // the games, as cards with air around them rather than divided rows
         ListView view = new ListView(this);
@@ -198,16 +236,17 @@ public final class Launcher extends Activity {
         list = new GameList();
         view.setAdapter(list);
         view.setOnItemClickListener((parent, row, position, id) -> {
-            File folder = games.get(position);
-            // one whose code is not on this device would only fail to start
-            if (!built(folder)) {
-                Toast.makeText(this, "Its code is not built on this device any more: add the game again", Toast.LENGTH_LONG).show();
-                return;
+            Entry game = listed.get(position);
+            // one whose code is not on this device would only fail to start:
+            // its page is where it is built again
+            if (game.ready) {
+                play(game.folder);
+            } else {
+                showGame(game);
             }
-            play(folder);
         });
         view.setOnItemLongClickListener((parent, row, position, id) -> {
-            gameMenu(games.get(position));
+            showGame(listed.get(position));
             return true;
         });
         page.addView(view, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -268,92 +307,204 @@ public final class Launcher extends Activity {
     }
 
     /**
-     * a game's long press: playing it, putting it on the home screen, its
-     * saves out and back, its shaders rebuilt, and taking it away again —
-     * what a file manager on the phone was needed for.
+     * a game's own page, in the list's place: its cover, how it was played,
+     * Play, and a card for each thing the app does with it — the menu it
+     * starts with, its saves out and back, its shaders, its shortcut, its
+     * files, and taking it away again. A title nothing was built for yet says
+     * so and offers to build it here. Null goes back to the list.
      */
-    private void gameMenu(File folder) {
-        String[] items = {
-            built(folder) ? "Play" : "Not built on this device: add it again",
-            "Play with its menu open",
-            "Put it on the home screen",
-            "Back up its saves",
-            "Restore its saves",
-            "Rebuild its shaders",
-            "Remove it"
-        };
-        // a card of the app's own: the game's name, a row a line, a rule and
-        // the red line where removing the game would go
-        Dialog dialog = new Dialog(this);
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(10), dp(12), dp(10), dp(10));
-        card.setBackground(rounded(SURFACE, dp(20)));
-        TextView heading = new TextView(this);
-        heading.setText(name(folder));
-        heading.setTextColor(TEXT);
-        heading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
-        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        heading.setPadding(dp(14), dp(6), dp(14), dp(12));
-        card.addView(heading);
-        boolean ready = built(folder);
-        for (int i = 0; i < items.length; i++) {
-            if (i == 6) {
-                View rule = new View(this);
-                rule.setBackgroundColor(0xFF1E2836);
-                LinearLayout.LayoutParams line = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
-                line.setMargins(dp(14), dp(6), dp(14), dp(6));
-                card.addView(rule, line);
-            }
-            final int which = i;
-            TextView row = new TextView(this);
-            row.setText(items[i]);
-            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-            row.setTextColor(i == 6 ? 0xFFFF9A8A : (i == 0 && !ready ? DIM : TEXT));
-            row.setPadding(dp(14), dp(13), dp(14), dp(13));
-            row.setBackground(new RippleDrawable(ColorStateList.valueOf(0x24FFFFFF), null, rounded(Color.WHITE, dp(12))));
-            row.setOnClickListener(v -> {
-                dialog.dismiss();
-                gameItem(folder, which);
-            });
-            card.addView(row);
+    private void showGame(Entry game) {
+        opened = game;
+        if (game == null) {
+            gamePage.setVisibility(View.GONE);
+            gamesPage.setVisibility(View.VISIBLE);
+            return;
         }
-        dialog.setContentView(card);
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            window.setLayout(Math.min((int) (getResources().getDisplayMetrics().widthPixels * 0.62f), dp(560)), ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
-        dialog.show();
+        gamePage.removeAllViews();
+        gamePage.addView(gameDetails(game));
+        gamesPage.setVisibility(View.GONE);
+        devicePage.setVisibility(View.GONE);
+        deviceButton.setSelected(false);
+        gamePage.setVisibility(View.VISIBLE);
     }
 
-    /** what a line of the long-press menu does. */
-    private void gameItem(File folder, int which) {
-        if (which == 0 || which == 1) {
-            if (built(folder)) {
-                play(folder, which == 1);
-            } else {
-                Toast.makeText(this, "Add the game again first: its code is not on this device", Toast.LENGTH_LONG).show();
+    /** what a game's page holds: the game at the left, what to do with it at the right. */
+    private View gameDetails(Entry game) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(14), dp(8), dp(14), dp(24));
+
+        Button back = button("‹  Games", v -> showGame(null));
+        LinearLayout.LayoutParams small = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
+        small.setMargins(dp(4), 0, 0, dp(8));
+        back.setLayoutParams(small);
+        back.setPadding(dp(16), 0, dp(16), 0);
+        back.setBackground(face(GREY, dp(19)));
+        page.addView(back);
+
+        LinearLayout columns = new LinearLayout(this);
+        columns.setOrientation(LinearLayout.HORIZONTAL);
+        page.addView(columns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // the game: its cover, its name, its title id and state, how it was
+        // played, and Play under them
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        left.setPadding(dp(4), 0, dp(12), 0);
+        columns.addView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        ImageView cover = new ImageView(this);
+        Bitmap bitmap = art(game);
+        cover.setImageBitmap(bitmap != null ? bitmap : monogram(game));
+        cover.setScaleType(bitmap != null ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_XY);
+        cover.setClipToOutline(true);
+        cover.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(18));
             }
-        } else if (which == 2) {
-            pin(folder);
-        } else if (which == 3) {
-            waiting = folder;
-            Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                    .addCategory(Intent.CATEGORY_OPENABLE)
-                    .setType("application/zip")
-                    .putExtra(Intent.EXTRA_TITLE, name(folder).replaceAll("[^A-Za-z0-9 ._-]", "") + " saves.zip");
-            startActivityForResult(save, BACKUP_SAVES);
-        } else if (which == 4) {
-            waiting = folder;
-            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
-            startActivityForResult(pick, RESTORE_SAVES);
-        } else if (which == 5) {
-            rebuildShaders(folder);
-        } else if (which == 6) {
-            removeGame(folder);
+        });
+        left.addView(cover, new LinearLayout.LayoutParams(dp(160), dp(160)));
+
+        TextView name = new TextView(this);
+        name.setText(game.name);
+        name.setTextColor(game.ready ? TEXT : 0xFF9AA7B8);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        name.setPadding(0, dp(8), 0, dp(4));
+        left.addView(name);
+
+        LinearLayout badges = new LinearLayout(this);
+        badges.setOrientation(LinearLayout.HORIZONTAL);
+        badges.addView(badge(game.id, 0xFF1A2230, DIM));
+        badges.addView(badge(game.ready ? "Ready" : "Not built", game.ready ? 0xFF14251C : 0xFF2A2113, game.ready ? 0xFF8BD5A0 : 0xFFFFC45A));
+        left.addView(badges);
+
+        TextView played = new TextView(this);
+        played.setText(game.folder == null ? "Not on this device yet" : said(game.folder));
+        played.setTextColor(DIM);
+        played.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        played.setPadding(0, dp(6), 0, dp(8));
+        left.addView(played);
+
+        Button go = button(game.ready ? "Play" : "Not built yet", v -> {
+            if (game.ready) {
+                play(game.folder);
+            }
+        });
+        go.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        go.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        go.setEnabled(game.ready);
+        go.setAlpha(game.ready ? 1f : 0.5f);
+        go.setBackground(face(game.ready ? BLUE : GREY, dp(14)));
+        left.addView(go, new LinearLayout.LayoutParams(dp(160), dp(52)));
+
+        // the cards, two to a row, each with what it does under its name
+        LinearLayout right = new LinearLayout(this);
+        right.setOrientation(LinearLayout.VERTICAL);
+        right.setPadding(dp(2), 0, 0, 0);
+        columns.addView(right, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2));
+
+        List<View> cards = new ArrayList<>();
+        if (game.ready) {
+            cards.add(gcard("Its menu at the start", "Starts with the settings menu showing", TEXT, () -> play(game.folder, true)));
+            cards.add(gcard("Back up its saves", "Its saves out as a zip", TEXT, () -> backupItsSaves(game.folder)));
+            cards.add(gcard("Restore its saves", "A zip or a folder back in", TEXT, () -> restoreItsSaves(game.folder)));
+            cards.add(gcard("Rebuild its shaders", "What it learned, built again first", TEXT, () -> rebuildShaders(game.folder)));
+            cards.add(gcard("Home screen", "A shortcut with its cover", TEXT, () -> pin(game.folder)));
+            cards.add(gcard("Files", "Title " + game.id + " · " + readable(sizeOf(game.folder)) + " · built", DIM, null));
+            cards.add(gcard("Remove it", "Its code goes; its saves can stay", 0xFFFF9A8A, () -> removeGame(game.folder)));
+        } else if (game.folder != null) {
+            cards.add(gcard("Build it on this device", "Its own dump, built here again", TEXT, () -> buildFrom(game.folder)));
+            cards.add(gcard("Remove it", "Its folder and its saves go", 0xFFFF9A8A, () -> removeGame(game.folder)));
+        } else {
+            cards.add(gcard("Build it on this device", "Pick its .3ds dump and the app builds it here", TEXT, this::pickBuild));
+            cards.add(gcard("Build it on a PC", "Then Add game takes its folder or pack file", DIM, null));
         }
+        for (int i = 0; i < cards.size(); i += 2) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(0, 0, 0, dp(10));
+            row.addView(cards.get(i), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+            if (i + 1 < cards.size()) {
+                LinearLayout.LayoutParams shape = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
+                shape.setMargins(dp(10), 0, 0, 0);
+                row.addView(cards.get(i + 1), shape);
+            }
+            right.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+        return page;
+    }
+
+    /** a card on a game's page: what it does and what that is, a note only read when it does nothing. */
+    private View gcard(String title, String under, int colour, Runnable action) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(16), dp(12), dp(16), dp(12));
+        card.setBackground(action == null ? rounded(0xFF121A24, dp(14)) : card(0xFF171F2B, 0xFF111823, dp(14)));
+        TextView name = new TextView(this);
+        name.setText(title);
+        name.setTextColor(colour);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        TextView sub = new TextView(this);
+        sub.setText(under);
+        sub.setTextColor(DIM);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        sub.setPadding(0, dp(2), 0, 0);
+        card.addView(name);
+        card.addView(sub);
+        if (action != null) {
+            card.setOnClickListener(v -> action.run());
+        }
+        return card;
+    }
+
+    /** a small round badge on a game's page: its title id, or whether it is built. */
+    private TextView badge(String text, int background, int colour) {
+        TextView badge = new TextView(this);
+        badge.setText(text);
+        badge.setTextColor(colour);
+        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        badge.setBackground(rounded(background, dp(9)));
+        badge.setPadding(dp(10), dp(4), dp(10), dp(4));
+        LinearLayout.LayoutParams shape = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        shape.setMargins(0, 0, dp(8), 0);
+        badge.setLayoutParams(shape);
+        return badge;
+    }
+
+    /** a dump picked to build here: BuildService does the work, its progress on the notification. */
+    private void pickBuild() {
+        startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), ADD_BUILD);
+    }
+
+    /** a game's code built here again from the dump in its own folder, no picker in the way. */
+    private void buildFrom(File folder) {
+        File rom = new File(folder, "game.3ds");
+        if (!rom.isFile()) {
+            Toast.makeText(this, "Its dump is not in its folder any more: add the game again", Toast.LENGTH_LONG).show();
+            return;
+        }
+        build(Uri.fromFile(rom));
+    }
+
+    /** a game's saves out: where to, picked by the person. */
+    private void backupItsSaves(File folder) {
+        waiting = folder;
+        Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/zip")
+                .putExtra(Intent.EXTRA_TITLE, name(folder).replaceAll("[^A-Za-z0-9 ._-]", "") + " saves.zip");
+        startActivityForResult(save, BACKUP_SAVES);
+    }
+
+    /** a game's saves back in, from a zip picked or a folder of them. */
+    private void restoreItsSaves(File folder) {
+        waiting = folder;
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+        startActivityForResult(pick, RESTORE_SAVES);
     }
 
     /** a game taken away: its saves kept for adding it again, or all of it. */
@@ -736,7 +887,9 @@ public final class Launcher extends Activity {
     }
 
     private void refresh() {
-        games.clear();
+        every.clear();
+        installed.clear();
+        List<Entry> here = new ArrayList<>();
         for (File volume : volumes()) {
             File[] folders = new File(volume, "games").listFiles();
             if (folders == null) {
@@ -745,27 +898,81 @@ public final class Launcher extends Activity {
             for (File folder : folders) {
                 // not one still coming in, or left half copied
                 if (!folder.getName().startsWith(".") && new File(folder, "game.3ds").isFile()) {
-                    games.add(folder);
+                    // the cover read out of the dump where it has none yet: the
+                    // banner's icon, as the 3DS's own home menu shows it
+                    if (!new File(folder, "icon.png").isFile()) {
+                        banner(new File(folder, "game.3ds"), folder);
+                    }
+                    here.add(new Entry(folder, folder.getName(), name(folder), built(folder)));
+                    installed.add(folder);
                 }
             }
         }
         String order = prefs().getString("order", "name");
-        Collections.sort(games, (a, b) -> {
+        Collections.sort(here, (a, b) -> {
             if ("recent".equals(order)) {
-                long was = played(a)[1], is = played(b)[1];
+                long was = played(a.folder)[1], is = played(b.folder)[1];
                 if (was != is) {
                     return Long.compare(is, was);
                 }
             }
-            return name(a).compareToIgnoreCase(name(b));
+            return a.name.compareToIgnoreCase(b.name);
         });
-        empty.setVisibility(games.isEmpty() ? View.VISIBLE : View.GONE);
+        // then the titles the app's profiles know that nothing was built for
+        // here yet, each named so that the list says what is left to build
+        Set<String> names = new HashSet<>();
+        for (Entry game : here) {
+            names.add(game.name.toLowerCase(Locale.ROOT));
+        }
+        List<Entry> known = new ArrayList<>();
+        File[] profiles = new File(getFilesDir(), "titles").listFiles();
+        if (profiles != null) {
+            for (File profile : profiles) {
+                String id = profile.getName();
+                if (id.length() != 16 || !new File(profile, "profile.toml").isFile()) {
+                    continue;
+                }
+                String title = profileName(id);
+                boolean onDevice = false;
+                for (Entry game : here) {
+                    onDevice |= game.id.equals(id);
+                }
+                if (title == null || onDevice || !names.add(title.toLowerCase(Locale.ROOT))) {
+                    continue;
+                }
+                known.add(new Entry(null, id, title, false));
+            }
+        }
+        Collections.sort(known, (a, b) -> a.name.compareToIgnoreCase(b.name));
+        every.addAll(here);
+        every.addAll(known);
+        listed.clear();
+        for (Entry game : every) {
+            if (("ready".equals(filter) && !game.ready) || ("notbuilt".equals(filter) && game.ready)) {
+                continue;
+            }
+            listed.add(game);
+        }
+        int readyCount = 0;
+        for (Entry game : every) {
+            if (game.ready) {
+                readyCount++;
+            }
+        }
+        String[] labels = {"All  ", "Ready  ", "Not built  "};
+        int[] counts = {every.size(), readyCount, every.size() - readyCount};
+        String[] keys = {"all", "ready", "notbuilt"};
+        for (int i = 0; i < chips.size(); i++) {
+            chips.get(i).setText(labels[i] + counts[i]);
+            chips.get(i).setSelected(keys[i].equals(filter));
+        }
+        empty.setVisibility(listed.isEmpty() ? View.VISIBLE : View.GONE);
         list.notifyDataSetChanged();
         // the games as the app's shortcuts too, for launchers that list them
         ShortcutManager shortcuts = getSystemService(ShortcutManager.class);
         if (shortcuts != null) {
             List<ShortcutInfo> each = new ArrayList<>();
-            for (File folder : games.subList(0, Math.min(games.size(), shortcuts.getMaxShortcutCountPerActivity()))) {
+            for (File folder : installed.subList(0, Math.min(installed.size(), shortcuts.getMaxShortcutCountPerActivity()))) {
                 each.add(shortcut(folder));
             }
             try {
@@ -778,7 +985,19 @@ public final class Launcher extends Activity {
 
     /** the game's name: its profile's, or the one its banner gives. */
     private String name(File folder) {
-        String id = folder.getName();
+        String known = profileName(folder.getName());
+        if (known != null) {
+            return known;
+        }
+        try {
+            return new String(readAll(new File(folder, "name.txt")), StandardCharsets.UTF_8).trim();
+        } catch (IOException ignored) {
+            return folder.getName();
+        }
+    }
+
+    /** a title's name from the profile the app carries, null when it has none. */
+    private String profileName(String id) {
         File profile = new File(new File(new File(getFilesDir(), "titles"), id), "profile.toml");
         try {
             for (String line : new String(readAll(profile), StandardCharsets.UTF_8).split("\n")) {
@@ -788,11 +1007,63 @@ public final class Launcher extends Activity {
             }
         } catch (IOException ignored) {
         }
-        try {
-            return new String(readAll(new File(folder, "name.txt")), StandardCharsets.UTF_8).trim();
-        } catch (IOException ignored) {
-            return id;
+        return null;
+    }
+
+    /** a game's cover: cover.png beside its folder's icon, else the icon read out of its dump, null for none. */
+    private Bitmap art(Entry game) {
+        if (game.folder == null) {
+            return null;
         }
+        Bitmap cover = BitmapFactory.decodeFile(new File(game.folder, "cover.png").getPath());
+        return cover != null ? cover : BitmapFactory.decodeFile(new File(game.folder, "icon.png").getPath());
+    }
+
+    /** a game's first letter on a colour of its own, for one with no art at all. */
+    private Bitmap monogram(Entry game) {
+        int size = dp(96);
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+        android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        paint.setColor(Color.HSVToColor(new float[] {Math.abs(game.id.hashCode() * 31) % 360f, 0.34f, 0.42f}));
+        canvas.drawRoundRect(new android.graphics.RectF(0, 0, size, size), dp(14), dp(14), paint);
+        paint.setColor(TEXT);
+        paint.setTextSize(size * 0.4f);
+        paint.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        paint.setTextAlign(android.graphics.Paint.Align.CENTER);
+        android.graphics.Paint.FontMetrics metrics = paint.getFontMetrics();
+        String letter = game.name.isEmpty() ? "?" : game.name.substring(0, 1).toUpperCase(Locale.ROOT);
+        canvas.drawText(letter, size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
+        return bitmap;
+    }
+
+    /** everything under a folder, its length in bytes. */
+    private static long sizeOf(File file) {
+        if (file == null) {
+            return 0;
+        }
+        if (file.isFile()) {
+            return file.length();
+        }
+        File[] parts = file.listFiles();
+        long size = 0;
+        if (parts != null) {
+            for (File part : parts) {
+                size += sizeOf(part);
+            }
+        }
+        return size;
+    }
+
+    /** a size as a person reads it: "1.2 GB", "340 MB". */
+    private static String readable(long size) {
+        if (size >= 1L << 30) {
+            return String.format(Locale.ROOT, "%.1f GB", size / (double) (1L << 30));
+        }
+        if (size >= 1L << 20) {
+            return (size + (1L << 19)) / (1L << 20) + " MB";
+        }
+        return Math.max(1, size / 1024) + " KB";
     }
 
     private static byte[] readAll(File file) throws IOException {
@@ -810,15 +1081,34 @@ public final class Launcher extends Activity {
         }
     }
 
+    /**
+     * a game in the list: one on this device, its folder, and whether its code
+     * was built here, or a title the app's profiles know that nothing was
+     * built for yet, its folder null.
+     */
+    private static final class Entry {
+        final File folder;
+        final String id;
+        final String name;
+        final boolean ready;
+
+        Entry(File folder, String id, String name, boolean ready) {
+            this.folder = folder;
+            this.id = id;
+            this.name = name;
+            this.ready = ready;
+        }
+    }
+
     private final class GameList extends BaseAdapter {
         @Override
         public int getCount() {
-            return games.size();
+            return listed.size();
         }
 
         @Override
         public Object getItem(int position) {
-            return games.get(position);
+            return listed.get(position);
         }
 
         @Override
@@ -828,7 +1118,7 @@ public final class Launcher extends Activity {
 
         @Override
         public View getView(int position, View reused, ViewGroup parent) {
-            File folder = games.get(position);
+            Entry game = listed.get(position);
             // a card of its own, its corners round, a ripple as it is touched
             FrameLayout holder = new FrameLayout(Launcher.this);
             holder.setPadding(dp(12), dp(5), dp(12), dp(5));
@@ -836,53 +1126,60 @@ public final class Launcher extends Activity {
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(14), dp(12), dp(14), dp(12));
-            row.setMinimumHeight(dp(76));
+            row.setMinimumHeight(dp(84));
             row.setBackground(card(0xFF171F2B, 0xFF111823, dp(16)));
-            // the game's icon where one was read out of it, its own corners
-            // round like the card's: no gap in the card where there is none
-            Bitmap bitmap = BitmapFactory.decodeFile(new File(folder, "icon.png").getPath());
-            if (bitmap != null) {
-                ImageView icon = new ImageView(Launcher.this);
-                icon.setImageBitmap(bitmap);
-                icon.setClipToOutline(true);
-                icon.setOutlineProvider(new ViewOutlineProvider() {
-                    @Override
-                    public void getOutline(View view, Outline outline) {
-                        outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(14));
-                    }
-                });
-                row.addView(icon, new LinearLayout.LayoutParams(dp(56), dp(56)));
-            }
+            // the game's cover, its own corners round like the card's: no gap
+            // in the card where the game has art, a lettered tile where it has
+            // none yet
+            Bitmap bitmap = art(game);
+            ImageView icon = new ImageView(Launcher.this);
+            icon.setImageBitmap(bitmap != null ? bitmap : monogram(game));
+            icon.setScaleType(bitmap != null ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_XY);
+            icon.setClipToOutline(true);
+            icon.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(14));
+                }
+            });
+            row.addView(icon, new LinearLayout.LayoutParams(dp(64), dp(64)));
             // the name, and under it how long it was played and when last
             LinearLayout column = new LinearLayout(Launcher.this);
             column.setOrientation(LinearLayout.VERTICAL);
             TextView text = new TextView(Launcher.this);
-            text.setText(name(folder));
+            text.setText(game.name);
             text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
             text.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
             text.setPadding(dp(16), 0, 0, 0);
             TextView under = new TextView(Launcher.this);
             under.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             under.setPadding(dp(16), dp(3), 0, 0);
-            if (built(folder)) {
+            if (game.ready) {
                 text.setTextColor(TEXT);
-                under.setText(said(folder));
+                under.setText(said(game.folder));
                 under.setTextColor(DIM);
-            } else {
+            } else if (game.folder != null) {
                 // nothing to play until its code is on this device again
                 text.setTextColor(0xFF9A9A9A);
-                under.setText("not built on this device: add the game again");
+                under.setText("Not built on this device any more: build it again");
+                under.setTextColor(0xFFFFC45A);
+            } else {
+                // a title the profiles know and nothing was built for yet
+                text.setTextColor(0xFF9A9A9A);
+                under.setText("Not built yet · build it on this device");
                 under.setTextColor(0xFFFFC45A);
             }
             column.addView(text);
             column.addView(under);
             row.addView(column, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            TextView more = new TextView(Launcher.this);
-            more.setText("›");
-            more.setTextColor(0xFF5C6B80);
-            more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
-            more.setPadding(dp(10), 0, 0, 0);
-            row.addView(more);
+            // whether it is ready to play, at the card's right
+            TextView state = new TextView(Launcher.this);
+            state.setText(game.ready ? "Ready" : "Not built");
+            state.setTextColor(game.ready ? 0xFF8BD5A0 : 0xFFFFC45A);
+            state.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            state.setBackground(rounded(game.ready ? 0xFF14251C : 0xFF2A2113, dp(9)));
+            state.setPadding(dp(10), dp(4), dp(10), dp(4));
+            row.addView(state);
             holder.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             return holder;
         }
@@ -1483,6 +1780,10 @@ public final class Launcher extends Activity {
     private void showDevice(boolean shown) {
         devicePage.setVisibility(shown ? View.VISIBLE : View.GONE);
         gamesPage.setVisibility(shown ? View.GONE : View.VISIBLE);
+        if (shown) {
+            gamePage.setVisibility(View.GONE);
+            opened = null;
+        }
         deviceButton.setSelected(shown);
         if (!shown) {
             return;
@@ -1683,12 +1984,16 @@ public final class Launcher extends Activity {
         // turned: the choices laid out again for the new width
         if (devicePage.getVisibility() == View.VISIBLE) {
             showDevice(true);
+        } else if (gamePage.getVisibility() == View.VISIBLE && opened != null) {
+            showGame(opened);
         }
     }
 
     @Override
     public void onBackPressed() {
-        if (devicePage.getVisibility() == View.VISIBLE) {
+        if (gamePage.getVisibility() == View.VISIBLE) {
+            showGame(null);
+        } else if (devicePage.getVisibility() == View.VISIBLE) {
             showDevice(false);
         } else {
             super.onBackPressed();
