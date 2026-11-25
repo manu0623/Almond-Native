@@ -437,8 +437,9 @@ public final class Launcher extends Activity {
             cards.add(gcard("Build it on this device", "Its own dump, built here again", TEXT, () -> buildFrom(game.folder)));
             cards.add(gcard("Remove it", "Its folder and its saves go", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else {
-            cards.add(gcard(game.dump == null ? "Build it on this device" : "Build it from your games folder",
-                    game.dump == null ? "Pick its .3ds dump and the app builds it here" : "Its dump is in the folder: built here, nothing to pick",
+            cards.add(gcard("Build it on this device",
+                    game.dump == null ? "Pick its .3ds dump and the app builds it here"
+                            : "Its dump is in your games folder: build it here, nothing to pick",
                     TEXT, () -> {
                         if (game.dump != null) {
                             build(game.dump);
