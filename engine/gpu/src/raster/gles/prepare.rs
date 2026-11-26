@@ -158,12 +158,13 @@ impl Gles {
         if text.lines().next() != Some("pocket-native precache 1") || vertices.lines().next() != Some("pocket-native vertex 1") {
             return;
         }
-        // built at an earlier start, its programs saved: the manifest has
-        // those the game used, the rest load as it needs them
+        // handed out at every start, not only the one that built it: the
+        // first builds the list, the rest load their saved copies, so a
+        // pairing the game has not drawn yet is ready before it is, rather
+        // than built in game. The manifest only has what the game used
         let stamp = program_cache_path(&self.name, "precache", &text).map(|path| path.with_extension("precached"));
         if stamp.as_ref().is_some_and(|path| path.exists()) {
-            log::info!("the precache list was built at an earlier start, its shaders load as the game needs them");
-            return;
+            log::info!("the precache list was built at an earlier start, its shaders come from their saved copies");
         }
         let listed = vertices
             .lines()

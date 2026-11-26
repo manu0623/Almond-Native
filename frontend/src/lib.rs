@@ -809,10 +809,16 @@ fn prepare_shaders(system: &mut System, font: &Font, settings: &Settings, pad: &
     let started = Instant::now();
     // how far along it was a few seconds in, for the time left to go by
     let mut from: Option<(Duration, usize)> = None;
-    // a press from before the screen came up is no skip
+    // a press or release from before the screen came up is no skip: the
+    // launcher's own A press is still letting go as the screen appears, and
+    // taken for a new one it throws the whole list away
     let (mut held, mut touched) = {
-        let pad = pad.lock().unwrap();
-        (pad.keys.clone(), !pad.fingers.is_empty())
+        let mut pad = pad.lock().unwrap();
+        let held: HashSet<u16> = pad.keys.union(&pad.let_go).copied().collect();
+        let touched = !pad.fingers.is_empty() || !pad.lifted.is_empty();
+        pad.let_go.clear();
+        pad.lifted.clear();
+        (held, touched)
     };
     while let (total, left @ 1..) = zakuro_gpu::preparing() {
         let (keys, touching) = {
