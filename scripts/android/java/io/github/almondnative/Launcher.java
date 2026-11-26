@@ -111,7 +111,7 @@ public final class Launcher extends Activity {
      * the GitHub repository this app updates itself from: set it to your
      * own fork when you publish releases there.
      */
-    private static final String RELEASES = "https://api.github.com/repos/CHANGE-ME/almond-native/releases/latest";
+    private static final String RELEASES = "https://api.github.com/repos/manu0623/Almond-Native/releases/latest";
 
     /** every game the list can show: the ones on this device, then the titles only its profiles know. */
     private final List<Entry> every = new ArrayList<>();
