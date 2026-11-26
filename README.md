@@ -17,3 +17,9 @@ No games are included: it works only with games dumped from your own console.
 
 Pocket Native and Almond Native are under the MIT license, see [LICENSE](LICENSE);
 [CREDITS.md](CREDITS.md) names everyone whose work is in here.
+
+## AI use
+
+Almond Native is developed with an AI coding agent, Freebuff's Codebuff: the
+fork's code, this README and the release notes are written with it from the
+maintainer's instructions, and built and checked on the device before release.
