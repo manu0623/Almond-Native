@@ -52,6 +52,9 @@ fn android_main(app: AndroidApp) {
     let _ = std::fs::create_dir_all(&data);
     let _ = std::fs::create_dir_all(own.join("config"));
     set_up(&own, &folder, &data);
+    // a driver of the app's own, if the config names one: Mesa's Zink drawing
+    // GLES on Turnip's Vulkan instead of the vendor's blobs
+    set_up_driver(&own);
     // "Play with its menu open" from the launcher's long press: the settings
     // come up before the game does, instead of by walking into it
     if bool_extra(&app, "menu") {
@@ -155,6 +158,44 @@ fn android_main(app: AndroidApp) {
 }
 
 /// the frontend's places and switches, as run.sh gives them on ArkOS.
+/// the graphics driver to draw with, a setting a line in
+/// files/config/driver.txt, set in the environment before EGL first loads:
+///   egl    /data/user/0/<app>/files/drivers/libEGL_zink.so
+///   gles   /data/user/0/<app>/files/drivers/libGLESv2_zink.so
+///   icd    /data/user/0/<app>/files/drivers/libvulkan_freedreno.json
+///   mesa   zink
+/// Anything not named is the platform's own, and a library that will not
+/// load falls back to it.
+fn set_up_driver(own: &Path) {
+    let Ok(text) = std::fs::read_to_string(own.join("config").join("driver.txt")) else { return };
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((setting, value)) = line.split_once(|character: char| character.is_whitespace() || character == '=') else { continue };
+        let value = value.trim().trim_matches(['"', '\'']);
+        if value.is_empty() {
+            continue;
+        }
+        let variable = match setting.trim().to_lowercase().as_str() {
+            "egl" => "ZAKURO_EGL_LIBRARY",
+            "gles" => "ZAKURO_GLES_LIBRARY",
+            "icd" => "VK_ICD_FILENAMES",
+            "drivers" => "VK_DRIVER_FILES",
+            "mesa" => "MESA_LOADER_DRIVER_OVERRIDE",
+            "gl" => "MESA_GL_VERSION_OVERRIDE",
+            "gles-version" => "MESA_GLES_VERSION_OVERRIDE",
+            other => {
+                log::warn!("driver.txt: no setting called {other}");
+                continue;
+            }
+        };
+        log::info!("driver.txt: {variable}={value}");
+        std::env::set_var(variable, value);
+    }
+}
+
 fn set_up(own: &Path, folder: &Path, data: &Path) {
     let _ = std::env::set_current_dir(folder);
     std::env::set_var("POCKET_NATIVE_LOG", data.join("log.txt"));

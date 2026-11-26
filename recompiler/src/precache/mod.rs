@@ -32,9 +32,13 @@ const DISABLE: [u32; 6] = [20, 21, 22, 16, 17, 19];
 /// the scene's fog, which the titles set from their own code.
 const FOG_MODES: [u32; 2] = [0, 5];
 const ETC1A4: u32 = 13;
-/// at most this many, the lists' first, then those the most materials share:
-/// a Mali-G31 takes about a third of a second a program the first time.
-const MOST: usize = 2000;
+/// at most this many, the lists' first, then those the most materials share.
+/// Kept above what the biggest titles work out (Zelda: A Link Between Worlds
+/// has 2770) so that a pairing its models need is prepared at the start and
+/// not built in game, where a first compile costs about a third of a second
+/// on a Mali-G31 and a tenth on an Adreno: the cap is only a stop for a title
+/// that works out more than any of them ever has.
+const MOST: usize = 4000;
 
 /// what a title's files hold.
 #[derive(Default)]

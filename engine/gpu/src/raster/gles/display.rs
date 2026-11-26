@@ -1466,6 +1466,24 @@ pub(super) fn open(names: &[&str]) -> Result<libloading::Library, String> {
     Err(first.unwrap_or_default())
 }
 
+/// the first of the names that loads, unless the environment names a library
+/// of its own first: a Mesa Zink and Turnip pair from the app's files, drawn
+/// with instead of the platform's own EGL and GLES.
+pub(super) fn open_driver(variable: &str, names: &[&str]) -> Result<libloading::Library, String> {
+    let named = std::env::var(variable).ok().map(|name| name.trim().to_owned()).filter(|name| !name.is_empty());
+    if let Some(name) = &named {
+        match open(&[name.as_str()]) {
+            Ok(library) => {
+                log::info!("{variable} {name}: drawing with it, not {names:?}");
+                return Ok(library);
+            }
+            // the platform's own is better than no drawing at all
+            Err(why) => log::warn!("{variable} {name} would not load, {why}, falling back to {names:?}"),
+        }
+    }
+    open(names)
+}
+
 /// the EGL, GBM and Mali libraries this process loaded, and whether it can
 /// use the Mali device, for telling why EGL would not start.
 pub(super) fn drawing_libraries() -> String {
@@ -1522,8 +1540,8 @@ impl Egl {
     }
 
     pub(super) fn new() -> Result<(Egl, glow::Context), String> {
-        let library = open(&["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
-        let gles = open(&["libGLESv2.so.2", "libGLESv2.so"]).ok();
+        let library = open_driver("ZAKURO_EGL_LIBRARY", &["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
+        let gles = open_driver("ZAKURO_GLES_LIBRARY", &["libGLESv2.so.2", "libGLESv2.so"]).ok();
         let loaded = egl::Egl::load_with(|name| symbol(&library, name));
         // SAFETY: plain EGL calls with attribute lists that end in NONE and
         // live as long as each call
@@ -1659,8 +1677,8 @@ impl Egl {
                 return Err("could not read the size of /dev/fb0".into());
             }
             let window = Box::new([info[0] as u16, info[1] as u16]);
-            let library = open(&["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
-            let gles = open(&["libGLESv2.so.2", "libGLESv2.so"]).ok();
+            let library = open_driver("ZAKURO_EGL_LIBRARY", &["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
+            let gles = open_driver("ZAKURO_GLES_LIBRARY", &["libGLESv2.so.2", "libGLESv2.so"]).ok();
             let loaded = egl::Egl::load_with(|name| symbol(&library, name));
             let display = loaded.GetDisplay(egl::DEFAULT_DISPLAY);
             let (mut major, mut minor) = (0, 0);
@@ -1704,8 +1722,8 @@ impl Egl {
     pub(super) fn new_window(window: *mut c_void) -> Result<(Egl, glow::Context, (i32, i32)), String> {
         // SAFETY: as in new, and the window stays valid as set_window asks
         unsafe {
-            let library = open(&["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
-            let gles = open(&["libGLESv2.so.2", "libGLESv2.so"]).ok();
+            let library = open_driver("ZAKURO_EGL_LIBRARY", &["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
+            let gles = open_driver("ZAKURO_GLES_LIBRARY", &["libGLESv2.so.2", "libGLESv2.so"]).ok();
             let loaded = egl::Egl::load_with(|name| symbol(&library, name));
             let display = loaded.GetDisplay(egl::DEFAULT_DISPLAY);
             let (mut major, mut minor) = (0, 0);
@@ -1847,8 +1865,8 @@ impl Egl {
                 window.layout_size = (width, height);
             }
 
-            let library = open(&["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
-            let gles = open(&["libGLESv2.so.2", "libGLESv2.so"]).ok();
+            let library = open_driver("ZAKURO_EGL_LIBRARY", &["libEGL.so.1", "libEGL.so"]).map_err(|why| format!("could not load libEGL, {why}"))?;
+            let gles = open_driver("ZAKURO_GLES_LIBRARY", &["libGLESv2.so.2", "libGLESv2.so"]).ok();
             let loaded = egl::Egl::load_with(|name| symbol(&library, name));
             let display = loaded.GetCurrentDisplay();
             let surface = loaded.GetCurrentSurface(0x3059);
