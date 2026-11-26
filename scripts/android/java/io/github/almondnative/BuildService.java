@@ -118,6 +118,7 @@ public final class BuildService extends Service {
         }
         say(1, "unpacking the compiler");
         Toolchain.unpack(this);
+        Toolchain.links(this);
 
         // beside the games, where adb can read it: a build that failed is
         // looked at with "adb shell cat .../files/build-log.txt"

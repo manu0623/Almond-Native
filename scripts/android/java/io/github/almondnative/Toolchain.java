@@ -2,6 +2,8 @@ package io.github.almondnative;
 
 import android.content.Context;
 import android.content.res.AssetManager;
+import android.system.ErrnoException;
+import android.system.Os;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -20,6 +22,11 @@ import java.util.zip.ZipInputStream;
  * load beside them (libLLVM, libclang-cpp, libc++_shared, libz, libzstd,
  * libffi, libxml2, libiconv). They are named lib<something>.so, which is only
  * a name, but lld keeps its own: it picks its driver from the name it runs as.
+ *
+ * Android unpacks only lib*.so from an APK, so the four whose name ends in a
+ * version are carried there under a name it keeps and linked back here under
+ * the name their programs ask for (NAMES), lld's own name among them: without
+ * the links there is no libz for libLLVM, and the compiler never runs.
  *
  * Everything clang reads and links with is an asset, unpacked into
  * files/toolchain/sysroot on the first build: the C headers, its own
@@ -44,6 +51,45 @@ final class Toolchain {
 
     static File tmp(Context context) {
         return new File(context.getFilesDir(), "tmp");
+    }
+
+    /** where the names Android cannot unpack are linked, beside the sysroot */
+    static File bin(Context context) {
+        return new File(prefix(context), "bin");
+    }
+
+    /** what a file is called in lib/, and the name the toolchain runs it as or
+     *  loads it under: Android unpacks only lib*.so, so the rest are links */
+    private static final String[][] NAMES = {
+            {"libld.lld.so", "ld.lld"},
+            {"libz.1.so", "libz.so.1"},
+            {"libzstd.1.so", "libzstd.so.1"},
+            {"libxml2.16.so", "libxml2.so.16"},
+    };
+
+    /** the links a build runs the toolchain through, made once and left */
+    static void links(Context context) throws IOException {
+        File bin = bin(context);
+        bin.mkdirs();
+        File lib = libDir(context);
+        for (String[] names : NAMES) {
+            File file = new File(lib, names[0]);
+            if (!file.isFile()) {
+                throw new IOException("this build of the app carries no " + names[0] + ": " + file + " is not there");
+            }
+            File link = new File(bin, names[1]);
+            if (link.exists()) {
+                continue;
+            }
+            // an old link left by another install points at nothing, and the
+            // one made now takes its place
+            link.delete();
+            try {
+                Os.symlink(file.getAbsolutePath(), link.getAbsolutePath());
+            } catch (ErrnoException error) {
+                throw new IOException("could not link " + names[1] + " to " + names[0] + ": " + error);
+            }
+        }
     }
 
     static File recompiler(Context context) {
@@ -96,9 +142,11 @@ final class Toolchain {
     static void applyTo(ProcessBuilder builder, Context context) {
         Map<String, String> env = builder.environment();
         File lib = libDir(context);
-        env.put("LD_LIBRARY_PATH", lib.getAbsolutePath());
+        File bin = bin(context);
+        // the names LLVM asks for first, then the files themselves
+        env.put("LD_LIBRARY_PATH", bin.getAbsolutePath() + ":" + lib.getAbsolutePath());
         // what ccwrap links with and looks in, and what 3dsrecomp compiles with
-        env.put("ALMOND_LIBDIR", lib.getAbsolutePath());
+        env.put("ALMOND_LIBDIR", bin.getAbsolutePath());
         env.put("ALMOND_CLANG", new File(lib, "libclang.so").getAbsolutePath());
         env.put("ALMOND_SYSROOT", new File(prefix(context), "sysroot").getAbsolutePath());
         env.put("CC", new File(lib, "libccwrap.so").getAbsolutePath());

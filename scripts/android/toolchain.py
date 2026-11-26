@@ -24,17 +24,23 @@ import zipfile
 
 LIBS = [
     ("bin/clang", "libclang.so"),
-    # lld picks its driver from the name it was run as, so this one keeps
-    # its own: libld.lld.so is the generic driver and refuses to link
-    ("bin/ld.lld", "ld.lld"),
+    # lld picks its driver from the name it was run as, and libld.lld.so is
+    # the generic driver, which refuses to link: the app makes it a link
+    # called ld.lld beside the sysroot, and ccwrap names that one
+    ("bin/ld.lld", "libld.lld.so"),
     ("lib/libLLVM.so", "libLLVM.so"),
     ("lib/libclang-cpp.so", "libclang-cpp.so"),
     ("lib/libc++_shared.so", "libc++_shared.so"),
-    ("lib/libz.so.1", "libz.so.1"),
-    ("lib/libzstd.so.1", "libzstd.so.1"),
+    # Android unpacks only lib*.so out of an APK's lib/<abi>/, and leaves
+    # libz.so.1, libzstd.so.1 and libxml2.so.16 in the archive, so there is no
+    # libz for libLLVM to load and the compiler never runs. They are carried
+    # under a name Android keeps, and the app links the name LLVM asks for
+    # to it on the first build (Toolchain.NAMES), as it does for ld.lld
+    ("lib/libz.so.1", "libz.1.so"),
+    ("lib/libzstd.so.1", "libzstd.1.so"),
     # what libLLVM itself loads: readelf -d on it, not just on the programs
     ("lib/libffi.so", "libffi.so"),
-    ("lib/libxml2.so.16", "libxml2.so.16"),
+    ("lib/libxml2.so.16", "libxml2.16.so"),
     ("lib/libiconv.so", "libiconv.so"),
 ]
 # the sysroot: what clang includes from, what it links a shared object with
