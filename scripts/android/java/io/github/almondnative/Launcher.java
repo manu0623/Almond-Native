@@ -39,6 +39,7 @@ import android.provider.DocumentsContract;
 import android.util.TypedValue;
 import android.view.Display;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ContextThemeWrapper;
@@ -47,7 +48,7 @@ import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ListView;
+import android.widget.GridView;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -104,6 +105,8 @@ public final class Launcher extends Activity {
     private static final int RESTORE_SAVES = 5;
     /** a shortcut's intent: the game in the "game" extra, played at once. */
     private static final String PLAY_GAME = "io.github.almondnative.PLAY";
+    /** what the pad does over the games, at the screen's bottom. */
+    private static final String HOME_HINTS = "A  Play      Y  Details      D-pad  Move";
     /**
      * the GitHub repository this app updates itself from: set it to your
      * own fork when you publish releases there.
@@ -124,9 +127,13 @@ public final class Launcher extends Activity {
     private ScrollView gamePage;
     /** the game that page is about, null for none. */
     private Entry opened;
+    /** what the pad's buttons do on the page that is open, at the screen's bottom. */
+    private TextView hints;
     /** the game a backup or a restore was picked from its long press for. */
     private File waiting;
     private GameList list;
+    /** the wall of covers, which takes the pad's focus when no page is open. */
+    private GridView grid;
     private TextView empty;
     /** the game list, and the Device page in its place while Device is lit. */
     private View gamesPage;
@@ -201,9 +208,18 @@ public final class Launcher extends Activity {
         gamePage.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         body.addView(gamePage);
         root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        // the pad's buttons on the page that is open, where a handheld's owner
+        // looks for them
+        hints = new TextView(this);
+        hints.setText(HOME_HINTS);
+        hints.setTextColor(DIM);
+        hints.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        hints.setGravity(Gravity.CENTER_VERTICAL);
+        hints.setPadding(dp(22), 0, dp(22), dp(6));
+        root.addView(hints, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         empty = new TextView(this);
-        empty.setText("No games built yet.\n\nAdd one Almond Native's kit built on a PC, or build it on this device: every title the app knows is under Build needed and Not here.");
+        empty.setText("No games built yet.\n\nAdd one Almond Native's kit built on a PC, or build it on this device: every title the app knows is under Build needed or Needs dump.");
         empty.setTextColor(DIM);
         empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         empty.setLineSpacing(dp(2), 1f);
@@ -235,17 +251,21 @@ public final class Launcher extends Activity {
         }
         page.addView(filters);
 
-        // the games, as cards with air around them rather than divided rows
-        ListView view = new ListView(this);
-        view.setDivider(null);
-        view.setDividerHeight(0);
-        view.setSelector(new ColorDrawable(Color.TRANSPARENT));
-        view.setPadding(0, dp(4), 0, dp(12));
+        // the games, as a wall of covers the pad walks a row at a time rather
+        // than a list of wide cards it crosses in one press
+        GridView view = new GridView(this);
+        grid = view;
+        view.setNumColumns(GridView.AUTO_FIT);
+        view.setColumnWidth(dp(150));
+        view.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+        view.setHorizontalSpacing(dp(2));
+        view.setVerticalSpacing(dp(6));
+        view.setPadding(0, dp(6), 0, dp(14));
         view.setClipToPadding(false);
-        // where the gamepad is, drawn over the card it is on: the list itself
-        // takes the focus, so no row shows it on its own
+        // where the gamepad is, drawn over the tile it is on: the grid itself
+        // takes the focus, so no tile shows it on its own
         view.setDrawSelectorOnTop(true);
-        view.setSelector(listCursor());
+        view.setSelector(gridCursor());
         list = new GameList();
         view.setAdapter(list);
         view.setOnItemClickListener((parent, row, position, id) -> {
@@ -265,6 +285,8 @@ public final class Launcher extends Activity {
         page.addView(view, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         setContentView(root);
         refresh();
+        // the pad starts on the games rather than in the bar above them
+        grid.requestFocus();
         playShortcut(getIntent());
         buildShortcut(getIntent());
         viewed(getIntent());
@@ -331,6 +353,8 @@ public final class Launcher extends Activity {
         if (game == null) {
             gamePage.setVisibility(View.GONE);
             gamesPage.setVisibility(View.VISIBLE);
+            hints.setText(HOME_HINTS);
+            grid.requestFocus();
             return;
         }
         gamePage.removeAllViews();
@@ -339,17 +363,18 @@ public final class Launcher extends Activity {
         devicePage.setVisibility(View.GONE);
         deviceButton.setSelected(false);
         gamePage.setVisibility(View.VISIBLE);
+        hints.setText("B  Back      D-pad  Choose      A  Open");
     }
 
     /** what a game's page holds: the game at the left, what to do with it at the right. */
     private View gameDetails(Entry game) {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(14), dp(8), dp(14), dp(24));
+        page.setPadding(dp(12), dp(2), dp(12), dp(10));
 
         Button back = button("‹  Games", v -> showGame(null));
-        LinearLayout.LayoutParams small = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
-        small.setMargins(dp(4), 0, 0, dp(8));
+        LinearLayout.LayoutParams small = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34));
+        small.setMargins(dp(4), 0, 0, dp(6));
         back.setLayoutParams(small);
         back.setPadding(dp(16), 0, dp(16), 0);
         back.setBackground(face(GREY, dp(19)));
@@ -377,21 +402,21 @@ public final class Launcher extends Activity {
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(18));
             }
         });
-        left.addView(cover, new LinearLayout.LayoutParams(dp(160), dp(160)));
+        left.addView(cover, new LinearLayout.LayoutParams(dp(118), dp(118)));
 
         TextView name = new TextView(this);
         name.setText(game.name);
         name.setTextColor(game.ready ? TEXT : 0xFF9AA7B8);
-        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         name.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        name.setPadding(0, dp(8), 0, dp(4));
+        name.setPadding(0, dp(4), 0, dp(2));
         left.addView(name);
 
         LinearLayout badges = new LinearLayout(this);
         badges.setOrientation(LinearLayout.HORIZONTAL);
         badges.addView(badge(game.id, 0xFF1A2230, DIM));
         Where place = where(game);
-        badges.addView(badge(place == Where.READY ? "Ready" : place == Where.BUILD ? "Build needed" : "Not here",
+        badges.addView(badge(place == Where.READY ? "Ready" : place == Where.BUILD ? "Build needed" : "Needs dump",
                 place == Where.READY ? 0xFF14251C : place == Where.BUILD ? 0xFF2A2113 : 0xFF1B2534,
                 place == Where.READY ? 0xFF8BD5A0 : place == Where.BUILD ? 0xFFFFC45A : 0xFFA9B7C9));
         left.addView(badges);
@@ -402,21 +427,23 @@ public final class Launcher extends Activity {
                 : dump != null ? "Dump: " + dump
                 : game.folder != null ? "Its dump is in its folder" : "Not on this device yet");
         played.setTextColor(DIM);
-        played.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        played.setPadding(0, dp(6), 0, dp(8));
+        played.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        played.setPadding(0, dp(3), 0, dp(4));
         left.addView(played);
 
-        Button go = button(game.ready ? "Play" : "Not built yet", v -> {
+        // the one thing to do with it: play it, or build it here when its code
+        // is not on this device yet
+        Button go = button(game.ready ? "Play" : "Build it on this device", v -> {
             if (game.ready) {
                 play(game.folder);
+            } else {
+                buildHere(game);
             }
         });
-        go.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        go.setTextSize(TypedValue.COMPLEX_UNIT_SP, game.ready ? 17 : 15);
         go.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        go.setEnabled(game.ready);
-        go.setAlpha(game.ready ? 1f : 0.5f);
-        go.setBackground(pillFace(game.ready ? BLUE : GREY, dp(14)));
-        left.addView(go, new LinearLayout.LayoutParams(dp(160), dp(52)));
+        go.setBackground(pillFace(BLUE, dp(14)));
+        left.addView(go, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
         // the cards, two to a row, each with what it does under its name
         LinearLayout right = new LinearLayout(this);
@@ -434,36 +461,18 @@ public final class Launcher extends Activity {
             cards.add(gcard("Files", "Title " + game.id + " · " + readable(sizeOf(game.folder)) + " · built", DIM, null));
             cards.add(gcard("Remove it", "Its code goes; its saves can stay", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else if (game.folder != null) {
-            // a build that did not finish leaves a folder and its copy of the
-            // dump: the games folder's own copy is taken again rather than a
-            // copy that may be short being built over
-            cards.add(gcard("Build it on this device",
-                    game.dump == null ? "Its own dump, built here again" : "Its dump in your games folder, copied and built here",
-                    TEXT, () -> {
-                        if (game.dump != null) {
-                            build(game.dump);
-                        } else {
-                            buildFrom(game.folder);
-                        }
-                    }));
+            // building it is the page's own button, the one "Not built yet"
+            // used to be: a build that did not finish leaves a folder and its
+            // copy of the dump, and the games folder's own copy is taken again
+            // rather than a copy that may be short being built over
             cards.add(gcard("Remove it", "Its folder and its saves go", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else {
-            cards.add(gcard("Build it on this device",
-                    game.dump == null ? "Pick its .3ds dump and the app builds it here"
-                            : "Its dump is in your games folder: build it here, nothing to pick",
-                    TEXT, () -> {
-                        if (game.dump != null) {
-                            build(game.dump);
-                        } else {
-                            pickBuild();
-                        }
-                    }));
             cards.add(gcard("Build it on a PC", "Then Add game takes its folder or pack file", DIM, null));
         }
         for (int i = 0; i < cards.size(); i += 2) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setPadding(0, 0, 0, dp(10));
+            row.setPadding(0, 0, 0, dp(8));
             row.addView(cards.get(i), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
             if (i + 1 < cards.size()) {
                 LinearLayout.LayoutParams shape = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
@@ -472,7 +481,60 @@ public final class Launcher extends Activity {
             }
             right.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
+        // its custom textures, always in view rather than asked about: the
+        // bottom right corner of the page
+        String textures = textureNote(game);
+        if (textures != null) {
+            TextView custom = new TextView(this);
+            custom.setText(textures);
+            custom.setTextColor(0xFFFFC45A);
+            custom.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            custom.setGravity(Gravity.END);
+            custom.setPadding(0, dp(4), dp(6), 0);
+            page.addView(custom, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
         return page;
+    }
+
+    /**
+     * the page's button for a game with no code on this device yet: its dump
+     * in the games folder, its own folder's copy, or one picked here, built
+     * by BuildService.
+     */
+    private void buildHere(Entry game) {
+        if (game.dump != null) {
+            build(game.dump);
+        } else if (game.folder != null) {
+            buildFrom(game.folder);
+        } else {
+            pickBuild();
+        }
+    }
+
+    /**
+     * a game's custom textures for its page: a Citra or Azahar texture pack in
+     * its data/textures replaces the game's own pictures and takes memory,
+     * which is worth knowing before a handheld with 1 GB runs out of it.
+     */
+    private String textureNote(Entry game) {
+        File dir = game.folder == null ? null : new File(new File(game.folder, "data"), "textures");
+        if (dir == null || !dir.isDirectory()) {
+            return null;
+        }
+        int count = pictures(dir);
+        return "Custom textures detected · " + (count == 1 ? "1 picture" : count + " pictures") + " · " + readable(sizeOf(dir));
+    }
+
+    /** the PNGs under a texture pack's folder, which is what it draws with. */
+    private static int pictures(File dir) {
+        int count = 0;
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                count += file.isDirectory() ? pictures(file) : file.getName().toLowerCase(Locale.ROOT).endsWith(".png") ? 1 : 0;
+            }
+        }
+        return count;
     }
 
     /** a card on a game's page: what it does and what that is, a note only read when it does nothing. */
@@ -480,19 +542,19 @@ public final class Launcher extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
-        card.setPadding(dp(16), dp(12), dp(16), dp(12));
+        card.setPadding(dp(14), dp(8), dp(14), dp(8));
         card.setFocusable(action != null);
         card.setBackground(action == null ? rounded(0xFF121A24, dp(14)) : selectable(0xFF171F2B, 0xFF111823, dp(14)));
         TextView name = new TextView(this);
         name.setText(title);
         name.setTextColor(colour);
-        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         TextView sub = new TextView(this);
         sub.setText(under);
         sub.setTextColor(DIM);
-        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        sub.setPadding(0, dp(2), 0, 0);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        sub.setPadding(0, dp(1), 0, 0);
         card.addView(name);
         card.addView(sub);
         if (action != null) {
@@ -813,6 +875,15 @@ public final class Launcher extends Activity {
         return new InsetDrawable(ring, dp(12), dp(5), dp(12), dp(5));
     }
 
+    /** the grid's cursor: a ring in the accent around the tile the pad is on. */
+    private Drawable gridCursor() {
+        GradientDrawable ring = new GradientDrawable();
+        ring.setColor(Color.TRANSPARENT);
+        ring.setCornerRadius(dp(20));
+        ring.setStroke(dp(2), BLUE);
+        return new InsetDrawable(ring, dp(8), dp(4), dp(8), dp(4));
+    }
+
     /**
      * a card's face where the gamepad can land on it: the same soft gradient,
      * a ring in the accent while it has the focus, lighter as it is pressed.
@@ -1069,7 +1140,7 @@ public final class Launcher extends Activity {
         }
         // what is on the device first, then what its games folder holds a
         // dump of, and the rest last
-        String[] labels = {"All  ", "Ready  ", "Build needed  ", "Not here  "};
+        String[] labels = {"All  ", "Ready  ", "Build needed  ", "Needs dump  "};
         int[] counts = {every.size(), readyCount, buildCount, every.size() - readyCount - buildCount};
         String[] keys = {"all", "ready", "build", "missing"};
         for (int i = 0; i < chips.size(); i++) {
@@ -1258,18 +1329,13 @@ public final class Launcher extends Activity {
         @Override
         public View getView(int position, View reused, ViewGroup parent) {
             Entry game = listed.get(position);
-            // a card of its own, its corners round, a ripple as it is touched
-            FrameLayout holder = new FrameLayout(Launcher.this);
-            holder.setPadding(dp(12), dp(5), dp(12), dp(5));
-            LinearLayout row = new LinearLayout(Launcher.this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(14), dp(12), dp(14), dp(12));
-            row.setMinimumHeight(dp(84));
-            row.setBackground(card(0xFF171F2B, 0xFF111823, dp(16)));
-            // the game's cover, its own corners round like the card's: no gap
-            // in the card where the game has art, a lettered tile where it has
-            // none yet
+            Where place = where(game);
+            // a tile: the game's cover with its corners round, its name under
+            // it, and under that how it was played or what it needs
+            LinearLayout tile = new LinearLayout(Launcher.this);
+            tile.setOrientation(LinearLayout.VERTICAL);
+            tile.setGravity(Gravity.CENTER_HORIZONTAL);
+            tile.setPadding(dp(8), dp(6), dp(8), dp(8));
             Bitmap bitmap = art(game);
             ImageView icon = new ImageView(Launcher.this);
             icon.setImageBitmap(bitmap != null ? bitmap : monogram(game));
@@ -1278,52 +1344,34 @@ public final class Launcher extends Activity {
             icon.setOutlineProvider(new ViewOutlineProvider() {
                 @Override
                 public void getOutline(View view, Outline outline) {
-                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(14));
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(16));
                 }
             });
-            row.addView(icon, new LinearLayout.LayoutParams(dp(64), dp(64)));
-            // the name, and under it how long it was played and when last
-            LinearLayout column = new LinearLayout(Launcher.this);
-            column.setOrientation(LinearLayout.VERTICAL);
+            // a title nothing of is here yet stays quieter than the rest
+            icon.setAlpha(place == Where.MISSING ? 0.5f : 1f);
+            tile.addView(icon, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(118)));
             TextView text = new TextView(Launcher.this);
             text.setText(game.name);
-            text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
             text.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            text.setPadding(dp(16), 0, 0, 0);
+            text.setTextColor(place == Where.READY ? TEXT : place == Where.BUILD ? 0xFFC3CDDA : 0xFF9A9A9A);
+            text.setMaxLines(2);
+            // two lines kept for every name, so the line under them lines up
+            text.setMinLines(2);
+            text.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            text.setGravity(Gravity.CENTER_HORIZONTAL);
+            text.setPadding(0, dp(7), 0, 0);
+            tile.addView(text, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             TextView under = new TextView(Launcher.this);
-            under.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            under.setPadding(dp(16), dp(3), 0, 0);
-            Where place = where(game);
-            if (place == Where.READY) {
-                text.setTextColor(TEXT);
-                under.setText(said(game.folder));
-                under.setTextColor(DIM);
-            } else if (place == Where.BUILD) {
-                // its dump is here: one build away from playing
-                text.setTextColor(0xFFC3CDDA);
-                under.setText(game.dump != null ? "Its dump is on the device · build it here"
-                        : "Its code is gone · build it again here");
-                under.setTextColor(0xFFFFC45A);
-            } else {
-                // a title the profiles know and the device has nothing of yet
-                text.setTextColor(0xFF9A9A9A);
-                under.setText("Not on this device · add its dump to your games folder");
-                under.setTextColor(0xFF7E8CA0);
-            }
-            column.addView(text);
-            column.addView(under);
-            row.addView(column, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            // where it stands, at the card's right: playable, one build
-            // away, or not on this device at all
-            TextView state = new TextView(Launcher.this);
-            state.setText(place == Where.READY ? "Ready" : place == Where.BUILD ? "Build needed" : "Not here");
-            state.setTextColor(place == Where.READY ? 0xFF8BD5A0 : place == Where.BUILD ? 0xFFFFC45A : 0xFFA9B7C9);
-            state.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-            state.setBackground(rounded(place == Where.READY ? 0xFF14251C : place == Where.BUILD ? 0xFF2A2113 : 0xFF1B2534, dp(9)));
-            state.setPadding(dp(10), dp(4), dp(10), dp(4));
-            row.addView(state);
-            holder.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            return holder;
+            under.setText(place == Where.READY ? said(game.folder) : place == Where.BUILD ? "Build needed" : "Needs dump");
+            under.setTextColor(place == Where.READY ? DIM : place == Where.BUILD ? 0xFFFFC45A : 0xFF7E8CA0);
+            under.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            under.setMaxLines(1);
+            under.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            under.setGravity(Gravity.CENTER_HORIZONTAL);
+            under.setPadding(0, dp(2), 0, 0);
+            tile.addView(under, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            return tile;
         }
     }
 
@@ -1965,6 +2013,7 @@ public final class Launcher extends Activity {
     private void showDevice(boolean shown) {
         devicePage.setVisibility(shown ? View.VISIBLE : View.GONE);
         gamesPage.setVisibility(shown ? View.GONE : View.VISIBLE);
+        hints.setText(shown ? "B  Back" : HOME_HINTS);
         if (shown) {
             gamePage.setVisibility(View.GONE);
             opened = null;
@@ -2291,6 +2340,24 @@ public final class Launcher extends Activity {
         } else if (gamePage.getVisibility() == View.VISIBLE && opened != null) {
             showGame(opened);
         }
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        // the pad's Y opens the page of the game the ring is on, the way a
+        // long press with a finger does, rather than a press and a hold
+        if (event.getAction() == KeyEvent.ACTION_DOWN && gamesPage.getVisibility() == View.VISIBLE
+                && (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_Y || event.getKeyCode() == KeyEvent.KEYCODE_Y)) {
+            int at = grid.getSelectedItemPosition();
+            if (at == GridView.INVALID_POSITION) {
+                at = grid.getFirstVisiblePosition();
+            }
+            if (at >= 0 && at < listed.size()) {
+                showGame(listed.get(at));
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override
