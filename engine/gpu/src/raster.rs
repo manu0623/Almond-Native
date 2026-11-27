@@ -2426,6 +2426,27 @@ pub(crate) fn stand_ins() -> bool {
     *ON.get_or_init(|| crate::switch("ZAKURO_STAND_INS", "draws stand in while their shaders build, none left out"))
 }
 
+/// a draw's pixels, cut to the scissor test's box when the test is on in its
+/// usual mode. the box comes in two registers, each corner with the column in
+/// its low half and the row in its high half, and both corners are part of the
+/// box: 0,0-239,399 is the whole of a 240x400 buffer.
+fn clip_to_scissor(registers: &[u32], (left, right): (i32, i32), (bottom, top): (i32, i32), height: u32) -> (i32, i32, i32, i32) {
+    // only rendering inside the box is what the draws traced so far ask for;
+    // the mode that renders outside it, and no test at all, keep the viewport
+    if registers[REG_SCISSOR_TEST] & 0x3 != 0x3 {
+        return (left, bottom, right, top);
+    }
+    let (pos1, pos2) = (registers[REG_SCISSOR_POS1], registers[REG_SCISSOR_POS2]);
+    let (x1, y1) = ((pos1 & 0xFFFF) as i32, (pos1 >> 16) as i32);
+    let (x2, y2) = ((pos2 & 0xFFFF) as i32, (pos2 >> 16) as i32);
+    let (x1, x2) = (x1.min(x2), x1.max(x2) + 1);
+    let (y1, y2) = (y1.min(y2), y1.max(y2) + 1);
+    // the viewport of a buffer drawn upside down is turned over to match its
+    // set one, and the box is given the same way
+    let (y1, y2) = if upside_down(registers) { (height as i32 - y2, height as i32 - y1) } else { (y1, y2) };
+    (left.max(x1), bottom.max(y1), right.min(x2), top.min(y2))
+}
+
 /// assembles shaded vertices into triangles the way the primitive configuration
 /// says, and fills them with the current back-end state.
 fn rasterize<M: GpuMemory>(registers: &[u32], memory: &mut M, resources: &mut Resources, vertices: Vertices) -> u32 {
@@ -2472,6 +2493,11 @@ fn rasterize<M: GpuMemory>(registers: &[u32], memory: &mut M, resources: &mut Re
         Some(_) => (buffer_height as i32 - top, buffer_height as i32 - bottom),
         None => (bottom, top),
     };
+    let left = (viewport_x.round() as i32).max(0);
+    let right = viewport_right.min(buffer_width as i32);
+    // what the scissor test lets through, the viewport cut to its box
+    let clipped = clip_to_scissor(registers, (left, right), (bottom, top), buffer_height);
+    let (left, bottom, right, top) = clipped;
 
     // draws are far more frequent than fills or transfers (thousands per
     // second versus dozens), so this stays at trace level to keep debug
@@ -2523,9 +2549,9 @@ fn rasterize<M: GpuMemory>(registers: &[u32], memory: &mut M, resources: &mut Re
     let state = DrawState {
         target: ColorTarget {
             addr: target_addr,
-            left: (viewport_x.round() as i32).max(0),
+            left,
             bottom,
-            right: viewport_right.min(buffer_width as i32),
+            right,
             top,
             buffer_width,
             buffer_height,

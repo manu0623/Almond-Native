@@ -33,6 +33,14 @@ pub const REG_SHADER_OUTPUT_TOTAL: usize = 0x004F;
 pub const REG_SHADER_OUTPUT_MAP: usize = 0x0050;
 pub const REG_SHADER_OUTPUT_MAP_END: usize = 0x0056;
 
+/// GPUREG_SCISSOR_TEST, whose low bits hold whether the scissor test is on
+/// and in which mode.
+pub const REG_SCISSOR_TEST: usize = 0x0065;
+/// the scissor test's box: two corners, the column in each one's low half and
+/// the row in its high half.
+pub const REG_SCISSOR_POS1: usize = 0x0066;
+pub const REG_SCISSOR_POS2: usize = 0x0067;
+
 pub const REG_VIEWPORT_XY: usize = 0x0068;
 
 pub const REG_TEXTURE_CONFIG: usize = 0x0080;
