@@ -1,0 +1,8 @@
+# The engine's tests draw through the GPU: one EGL context, one driver,
+# and one GLES program cache per process, which the tests share without
+# guarding it. Two of them at once crash inside the driver (a SIGSEGV that
+# only shows with the `gles` feature on and two test threads or more), so
+# cargo runs them one at a time, and `cargo test -- --test-threads=N` still
+# asks for more when that is what you want.
+[env]
+RUST_TEST_THREADS = "1"

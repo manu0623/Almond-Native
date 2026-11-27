@@ -1399,6 +1399,7 @@ impl Gpu {
         if !std::mem::take(&mut self.twins.behind) {
             return;
         }
+        #[cfg_attr(not(feature = "gles"), allow(unused_variables))]
         let Some((first, other, _)) = self.twins.pair else { return };
         #[cfg(feature = "gles")]
         if let Some(hardware) = self.resources.hardware.as_mut() {

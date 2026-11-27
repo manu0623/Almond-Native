@@ -60,6 +60,11 @@ fn android_main(app: AndroidApp) {
     if bool_extra(&app, "menu") {
         std::env::set_var("ZAKURO_OPEN_MENU", "1");
     }
+    // the launcher's start that builds the shaders a rebuild listed and then
+    // leaves, rather than one for play
+    if bool_extra(&app, "prewarm") {
+        std::env::set_var("ZAKURO_PREWARM", "1");
+    }
     std::panic::set_hook(Box::new(|info| {
         log::error!("{info}");
         let _ = std::fs::write("data/panic.txt", info.to_string());
@@ -110,14 +115,20 @@ fn android_main(app: AndroidApp) {
     let mut last_size = None;
     loop {
         app.poll_events(Some(Duration::from_millis(8)), |event| match event {
-            // the app away holds the game still, back it goes on
-            PollEvent::Main(MainEvent::Pause) => input::PAUSED.store(true, Ordering::Relaxed),
+            // the app away holds the game still, back it goes on, with
+            // nothing held: a finger or a button let go while it was away
+            // never came to us, and the game would hold it down for good
+            PollEvent::Main(MainEvent::Pause) => {
+                input::PAUSED.store(true, Ordering::Relaxed);
+                pad.lock().unwrap().let_go_of_everything();
+            }
             PollEvent::Main(MainEvent::Resume { .. }) => input::PAUSED.store(false, Ordering::Relaxed),
             // its window goes while it is away, the renderer letting go of it
             // first, and a new one comes back
             PollEvent::Main(MainEvent::TerminateWindow { .. }) => {
                 zakuro_gpu::set_window(std::ptr::null_mut());
                 window = None;
+                pad.lock().unwrap().let_go_of_everything();
             }
             PollEvent::Main(MainEvent::InitWindow { .. }) => {
                 window = app.native_window();

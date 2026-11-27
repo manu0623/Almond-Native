@@ -131,6 +131,8 @@ public final class Launcher extends Activity {
     private TextView hints;
     /** the game a backup or a restore was picked from its long press for. */
     private File waiting;
+    /** the game a rebuild's shaders are building in, reported when it comes back. */
+    private File warming;
     private GameList list;
     /** the wall of covers, which takes the pad's focus when no page is open. */
     private GridView grid;
@@ -366,6 +368,22 @@ public final class Launcher extends Activity {
         hints.setText("B  Back      D-pad  Choose      A  Open");
     }
 
+    /**
+     * the page of the game a build just made, opened on it: the build's own
+     * news is its Play button, rather than a list to go back through.
+     */
+    private void showBuilt(String id) {
+        if (id == null) {
+            return;
+        }
+        for (Entry game : every) {
+            if (id.equals(game.id) && game.folder != null) {
+                showGame(game);
+                return;
+            }
+        }
+    }
+
     /** what a game's page holds: the game at the left, what to do with it at the right. */
     private View gameDetails(Entry game) {
         LinearLayout page = new LinearLayout(this);
@@ -425,7 +443,7 @@ public final class Launcher extends Activity {
         String dump = game.dump == null ? null : dumpName(game.dump);
         played.setText(game.ready ? said(game.folder)
                 : dump != null ? "Dump: " + dump
-                : game.folder != null ? "Its dump is in its folder" : "Not on this device yet");
+                : game.folder != null ? "The dump is in the game's folder" : "Not on this device yet");
         played.setTextColor(DIM);
         played.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         played.setPadding(0, dp(3), 0, dp(4));
@@ -453,21 +471,22 @@ public final class Launcher extends Activity {
 
         List<View> cards = new ArrayList<>();
         if (game.ready) {
-            cards.add(gcard("Its menu at the start", "Starts with the settings menu showing", TEXT, () -> play(game.folder, true)));
-            cards.add(gcard("Back up its saves", "Its saves out as a zip", TEXT, () -> backupItsSaves(game.folder)));
-            cards.add(gcard("Restore its saves", "A zip or a folder back in", TEXT, () -> restoreItsSaves(game.folder)));
-            cards.add(gcard("Rebuild its shaders", "What it learned, built again first", TEXT, () -> rebuildShaders(game.folder)));
-            cards.add(gcard("Home screen", "A shortcut with its cover", TEXT, () -> pin(game.folder)));
+            cards.add(gcard("Game menu at start", "Opens the settings menu before the game starts", TEXT, () -> play(game.folder, true)));
+            cards.add(gcard("Back up saves", "Writes this game's saves to a zip file", TEXT, () -> backupItsSaves(game.folder)));
+            cards.add(gcard("Restore saves", "Puts a zip or folder of saves back", TEXT, () -> restoreItsSaves(game.folder)));
+            cards.add(gcard("Rebuild shaders", "Rebuilds the shader list, then compiles it and closes the game", TEXT, () -> rebuildShaders(game.folder)));
+            cards.add(gcard("Remove shaders", "For testing: builds every shader from nothing again", 0xFFFFC45A, () -> removeShaders(game.folder)));
+            cards.add(gcard("Home screen shortcut", "Adds the game's cover to the home screen", TEXT, () -> pin(game.folder)));
             cards.add(gcard("Files", "Title " + game.id + " · " + readable(sizeOf(game.folder)) + " · built", DIM, null));
-            cards.add(gcard("Remove it", "Its code goes; its saves can stay", 0xFFFF9A8A, () -> removeGame(game.folder)));
+            cards.add(gcard("Remove game", "Deletes the built code; saves can stay", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else if (game.folder != null) {
             // building it is the page's own button, the one "Not built yet"
             // used to be: a build that did not finish leaves a folder and its
             // copy of the dump, and the games folder's own copy is taken again
             // rather than a copy that may be short being built over
-            cards.add(gcard("Remove it", "Its folder and its saves go", 0xFFFF9A8A, () -> removeGame(game.folder)));
+            cards.add(gcard("Remove game", "Deletes the game's folder and its saves", 0xFFFF9A8A, () -> removeGame(game.folder)));
         } else {
-            cards.add(gcard("Build it on a PC", "Then Add game takes its folder or pack file", DIM, null));
+            cards.add(gcard("Build on a PC", "Then Add game takes the built folder or pack file", DIM, null));
         }
         for (int i = 0; i < cards.size(); i += 2) {
             LinearLayout row = new LinearLayout(this);
@@ -586,7 +605,7 @@ public final class Launcher extends Activity {
     private void buildFrom(File folder) {
         File rom = new File(folder, "game.3ds");
         if (!rom.isFile()) {
-            Toast.makeText(this, "Its dump is not in its folder any more: add the game again", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "The dump is not in the game's folder any more. Add the game again.", Toast.LENGTH_LONG).show();
             return;
         }
         build(Uri.fromFile(rom));
@@ -613,13 +632,13 @@ public final class Launcher extends Activity {
     private void removeGame(File folder) {
         asks()
                 .setTitle("Remove " + name(folder) + "?")
-                .setMessage("Keeping its saves leaves the data/ folder, which adding the game again finds. Its built code goes either way.")
-                .setPositiveButton("Keep its saves", (dialog, which) -> inBackground("Removing", progress -> {
+                .setMessage("Keep saves? The data/ folder stays, so adding the game again finds them. The built code is deleted either way.")
+                .setPositiveButton("Keep saves", (dialog, which) -> inBackground("Removing", progress -> {
                     deleteGame(folder, true);
-                    return "Removed " + name(folder) + ", its saves kept";
+                    return "Removed " + name(folder) + ", saves kept";
                 }))
                 .setNeutralButton("Remove everything", (dialog, which) -> asks()
-                        .setMessage("Its saves go too: everything saved in the game so far.")
+                        .setMessage("This also deletes every save in this game.")
                         .setPositiveButton("Remove everything", (again, confirmed) -> inBackground("Removing", progress -> {
                             deleteGame(folder, false);
                             return "Removed " + name(folder);
@@ -650,24 +669,142 @@ public final class Launcher extends Activity {
     }
 
     /**
-     * the programs the engine builds before a start, built again from the ones
-     * a run learned: for a game learned when those programs were other ones.
+     * the programs the engine builds before a start, built again: the list
+     * from the game's files and the title's learned ones, and the driver's
+     * copies of them gone, so that the next start compiles them rather than
+     * loading them. A game that learned nothing still gets the list the
+     * game's own files hold. The dialog stays up until the list is written:
+     * a start begun meanwhile would find no list and build nothing ahead.
      */
     private void rebuildShaders(File folder) {
-        File learned = new File(new File(folder, "data"), "shaders.txt");
-        if (!learned.isFile()) {
-            Toast.makeText(this, "It has not learned any shaders yet: play it once", Toast.LENGTH_LONG).show();
+        // nothing is deleted under a game that is playing, and a list still
+        // being written is no list to build again
+        if (!canTouchShaders()) {
             return;
         }
-        new File(new File(folder, "vertex"), "precache.txt").delete();
+        File result = new File(getFilesDir(), BuildService.SHADERS_RESULT);
+        result.delete();
+        deleteAll(new File(new File(folder, "vertex"), "precache.txt"));
+        // a rebuild that keeps them hands the same programs back, build or not
+        deleteAll(new File(getFilesDir(), "cache/zakuro/gles"));
         try {
             startForegroundService(new Intent(this, BuildService.class)
                     .setAction(BuildService.ACTION_SHADERS)
                     .putExtra(BuildService.EXTRA_GAME, folder.getAbsolutePath()));
-            Toast.makeText(this, "Rebuilding its shaders: the next start builds them all first", Toast.LENGTH_LONG).show();
         } catch (RuntimeException error) {
             Toast.makeText(this, "Could not start that: " + error.getMessage(), Toast.LENGTH_LONG).show();
+            return;
         }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(16), dp(24), dp(8));
+        TextView label = new TextView(this);
+        label.setText("Finding the game's shaders...");
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setIndeterminate(true);
+        box.addView(label);
+        box.addView(bar);
+        AlertDialog dialog = asks().setTitle("Rebuilding shaders").setView(box).setCancelable(false).show();
+        Handler poll = new Handler(Looper.getMainLooper());
+        long began = System.currentTimeMillis();
+        Runnable look = new Runnable() {
+            @Override
+            public void run() {
+                String said = null;
+                try {
+                    said = new String(readAll(result), StandardCharsets.UTF_8).trim();
+                } catch (IOException notYet) {
+                    // still being written
+                }
+                if (said == null) {
+                    if (System.currentTimeMillis() - began < 120000 && dialog.isShowing()) {
+                        poll.postDelayed(this, 300);
+                        return;
+                    }
+                    said = "Rebuilding the shaders is taking longer than usual. It carries on in the background.";
+                }
+                boolean ready = "ready".equals(said);
+                result.delete();
+                if (dialog.isShowing()) {
+                    dialog.dismiss();
+                }
+                if (ready && gameProcess() == 0) {
+                    // the list is half the work: the programs are built now
+                    warmShaders(folder);
+                } else if (ready) {
+                    Toast.makeText(Launcher.this, "Shaders are ready. Press Play.", Toast.LENGTH_LONG).show();
+                } else if (said.startsWith("Rebuilding")) {
+                    Toast.makeText(Launcher.this, said, Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(Launcher.this, "The shaders were not rebuilt. Play the game once, then try again.", Toast.LENGTH_LONG).show();
+                }
+            }
+        };
+        poll.postDelayed(look, 300);
+    }
+
+    /**
+     * whether the shader files may be deleted and built again: not while the
+     * game is playing, whose renderer keeps its own copies, and not while a
+     * list is still being written or built.
+     */
+    private boolean canTouchShaders() {
+        if (BuildService.preparing || warming != null) {
+            Toast.makeText(this, "The shaders are still being built. One moment.", Toast.LENGTH_LONG).show();
+            return false;
+        }
+        if (gameProcess() != 0) {
+            Toast.makeText(this, "Close the game before touching its shaders.", Toast.LENGTH_LONG).show();
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * the programs a rebuilt list names, built now rather than at the next
+     * play: the game started only for them, leaving by itself once they are
+     * all built, its window showing how far along it is.
+     */
+    private void warmShaders(File folder) {
+        warming = folder;
+        // a count left by a warm start that never finished is no count
+        new File(new File(folder, "data"), "prewarm.txt").delete();
+        Toast.makeText(this, "Compiling shaders. The game closes by itself when they are all built.", Toast.LENGTH_LONG).show();
+        start(folder, true, false, true);
+    }
+
+    /**
+     * the shaders a game learned, the list built from them and the copies the
+     * GPU's driver kept, gone: for trying a first run again without adding the
+     * game and its saves back.
+     */
+    private void removeShaders(File folder) {
+        if (!canTouchShaders()) {
+            return;
+        }
+        asks()
+                .setTitle("Remove shaders?")
+                .setMessage("For testing: the shaders this game learned and the driver's saved copies go, and the list is built again from the game's files alone, so the next start compiles them all from nothing. Saves stay.")
+                .setPositiveButton("Remove them", (dialog, which) -> new Thread(() -> {
+                    removedShaders(folder);
+                    // the list the game's files hold, so a start still prepares them all
+                    runOnUiThread(() -> rebuildShaders(folder));
+                }).start())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /**
+     * those files: the manifest a run learned and its vertex programs, the
+     * title's list of them, the precache list built from them, and the
+     * driver's copies, so that a start builds them as a first run did.
+     */
+    private void removedShaders(File folder) {
+        deleteAll(new File(new File(folder, "data"), "shaders.txt"));
+        deleteAll(new File(new File(folder, "data"), "shaders.txt.vertex"));
+        deleteAll(new File(folder, "title-shaders.txt"));
+        deleteAll(new File(new File(folder, "vertex"), "precache.txt"));
+        deleteAll(new File(getFilesDir(), "cache/zakuro/gles"));
     }
 
     /** a game's saves, data/ as it is, into the zip the person picked. */
@@ -987,7 +1124,30 @@ public final class Launcher extends Activity {
         // build went
         told("Graphics self-test", "selftest.txt");
         told("The game did not start", "last-error.txt");
-        told("Building a game", "build-result.txt");
+        told("Build finished", "build-result.txt");
+        // the game a rebuild started only to build its shaders is back: what
+        // it built goes where it left it, and is said here rather than assumed
+        if (warming != null) {
+            File folder = warming;
+            warming = null;
+            File said = new File(new File(folder, "data"), "prewarm.txt");
+            String count = null;
+            try {
+                count = new String(readAll(said), StandardCharsets.UTF_8).trim();
+            } catch (IOException none) {
+                // the game left no word: said below
+            }
+            said.delete();
+            String message;
+            if (count == null || count.isEmpty()) {
+                message = "The game did not report its shaders. Press Play.";
+            } else if (count.startsWith("0 of 0")) {
+                message = "There was no shader list to build. Rebuild the shaders.";
+            } else {
+                message = "Compiled " + count + " shaders. Press Play.";
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        }
         prepareShaders();
         // a game that ended while the launcher was away, its time counted now
         if (settlePlaytime()) {
@@ -1384,6 +1544,11 @@ public final class Launcher extends Activity {
     }
 
     private void play(File folder, boolean menu) {
+        // a start reads the list once, at once: one still being written is no list
+        if (BuildService.isPreparing() || warming != null) {
+            Toast.makeText(this, "The shaders are still being built. One moment.", Toast.LENGTH_LONG).show();
+            return;
+        }
         int pid = gameProcess();
         String running = null;
         try {
@@ -1435,16 +1600,29 @@ public final class Launcher extends Activity {
      * the rest are reached without walking into the game to press Menu.
      */
     private void start(File folder, boolean fresh, boolean menu) {
-        // when this game started, which onResume turns into its time played
-        try (FileOutputStream out = new FileOutputStream(playingSince())) {
-            out.write(String.valueOf(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
-        } catch (IOException ignored) {
+        start(folder, fresh, menu, false);
+    }
+
+    /**
+     * a game started, building its shaders and leaving rather than played
+     * when warm is set: that is no time played, so its clock does not start.
+     */
+    private void start(File folder, boolean fresh, boolean menu, boolean warm) {
+        if (!warm) {
+            // when this game started, which onResume turns into its time played
+            try (FileOutputStream out = new FileOutputStream(playingSince())) {
+                out.write(String.valueOf(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+            } catch (IOException ignored) {
+            }
         }
         Intent intent = new Intent(this, Game.class);
         intent.putExtra("game", folder.getAbsolutePath());
         intent.putExtra("orientation", prefs().getString("orientation", "auto"));
         if (menu) {
             intent.putExtra("menu", true);
+        }
+        if (warm) {
+            intent.putExtra("prewarm", true);
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | (fresh ? Intent.FLAG_ACTIVITY_CLEAR_TASK : 0));
         ActivityOptions options = ActivityOptions.makeBasic();
@@ -1564,8 +1742,11 @@ public final class Launcher extends Activity {
                     dialog.dismiss();
                 }
                 String said = BuildService.result;
-                Toast.makeText(Launcher.this, said == null ? "Done" : said, Toast.LENGTH_LONG).show();
+                Toast.makeText(Launcher.this, said == null ? "The build finished" : said, Toast.LENGTH_LONG).show();
                 refresh();
+                // the game the build just made, its page ready to play: no
+                // going back to the list and into it again
+                showBuilt(BuildService.builtGame);
             }
         };
         poll.postDelayed(look, 400);

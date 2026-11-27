@@ -495,7 +495,7 @@ fn learn(rom: &str, recorded: &Path, list: &Path) {
     }
     let added = lines.len() - before.lines().count().saturating_sub(1);
     let text = std::iter::once(recomp3ds::precache::TITLE_HEADER.to_owned()).chain(lines).collect::<Vec<_>>().join("\n") + "\n";
-    if let Err(e) = list.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(list, text)) {
+    if let Err(e) = recomp3ds::whole::write(list, text.as_bytes()) {
         eprintln!("{}: {e}", list.display());
         exit(1);
     }

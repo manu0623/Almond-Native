@@ -95,6 +95,22 @@ pub struct Pad {
     pub motion: Option<([f32; 3], [f32; 3])>,
 }
 
+impl Pad {
+    /// lets go of everything held, for the app going away: a finger lifted
+    /// or a button released while it was in the background never reached us,
+    /// and back it would take the finger for down for good, a game's touch
+    /// screen left pressed where it was, its map stuck zoomed and its
+    /// buttons held.
+    pub fn let_go_of_everything(&mut self) {
+        self.keys.clear();
+        self.let_go.clear();
+        self.fingers.clear();
+        self.lifted.clear();
+        self.second_touch = None;
+        self.axes = [0; 8];
+    }
+}
+
 /// the pad a program around the frontend fills, in place of evdev's.
 static SHARED: std::sync::OnceLock<Arc<Mutex<Pad>>> = std::sync::OnceLock::new();
 

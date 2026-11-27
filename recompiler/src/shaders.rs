@@ -90,7 +90,7 @@ pub fn write_vertex_list(found: &[Shbin], dir: &std::path::Path) -> std::io::Res
             count += 1;
         }
     }
-    std::fs::write(dir.join("vertex.txt"), list)?;
+    crate::whole::write(&dir.join("vertex.txt"), list.as_bytes())?;
     Ok(count)
 }
 

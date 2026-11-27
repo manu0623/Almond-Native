@@ -48,6 +48,24 @@ public final class BuildService extends Service {
     static volatile int percent = 0;
     /** how the last build ended, null until one has */
     static volatile String result;
+    /** the title id the last build made, for the launcher to open its page */
+    static volatile String builtGame;
+    /** whether a game's shader lists are being built, which a start waits for */
+    static volatile boolean preparing;
+    /** when that wait started, so a run that died cannot hold every start */
+    static volatile long preparingSince;
+
+    /**
+     * whether shaders are being built now. The flag is dropped by the thread
+     * that built them and by the service going; one left behind by a process
+     * that was killed with it is no wait, and a quarter of an hour is longer
+     * than any list this app builds.
+     */
+    static boolean isPreparing() {
+        return preparing && System.currentTimeMillis() - preparingSince < 15 * 60 * 1000L;
+    }
+    /** where the shader service says how it went, read by the launcher's dialog */
+    static final String SHADERS_RESULT = "shaders-result.txt";
 
     private static final int NOTIFICATION = 0x6a6d;
     /** "recompiling, 36 of 72" */
@@ -72,26 +90,41 @@ public final class BuildService extends Service {
             return START_NOT_STICKY;
         }
         if (ACTION_SHADERS.equals(intent.getAction())) {
+            preparing = true;
+            preparingSince = System.currentTimeMillis();
             startForeground(NOTIFICATION, shown("Preparing the shaders", 0));
             new Thread(() -> {
+                boolean built;
                 try {
-                    shaderLists(new File(game));
+                    built = shaderLists(new File(game));
                 } catch (Throwable error) {
                     Log.e(TAG, "the shaders were not prepared", error);
+                    built = false;
                 }
-                stopForeground(true);
+                // where the launcher's dialog reads it, before a start is let through
+                try (FileOutputStream out = new FileOutputStream(new File(getFilesDir(), SHADERS_RESULT))) {
+                    out.write((built ? "ready" : "failed").getBytes(StandardCharsets.UTF_8));
+                } catch (IOException ignored) {
+                }
+                preparing = false;
+                // a card that did its work silently looks like one that did nothing
+                stopForeground(false);
+                getSystemService(NotificationManager.class).notify(NOTIFICATION,
+                        shown(built ? "Shader list is ready. Building the shaders now." : "The shader list was not rebuilt. Play the game once, then try again.", built ? 100 : 0));
                 stopSelf();
             }, "shaders").start();
             return START_NOT_STICKY;
         }
         Uri uri = Uri.parse(game);
+        builtGame = null;
+        result = null;
         startForeground(NOTIFICATION, shown("Building a game", 0));
         new Thread(() -> {
             try {
                 result = build(uri);
             } catch (Throwable error) {
                 Log.e(TAG, "the build failed", error);
-                result = "That did not work: " + error;
+                result = "The game did not compile: " + error;
             }
             stage = "done";
             // where the launcher shows it: a notification is easy to miss, and
@@ -175,7 +208,7 @@ public final class BuildService extends Service {
 
         File built = new File(out, id + ".so");
         if (!built.isFile()) {
-            throw new IOException("the recompiler made no " + id + ".so, its log is " + log);
+            throw new IOException("the recompiler made no " + id + ".so, the log is " + log);
         }
         say(94, "installing " + name);
         File code = new File(new File(getFilesDir(), "code"), id + ".so");
@@ -188,8 +221,9 @@ public final class BuildService extends Service {
         // where Android loads code from, and nowhere a game may write
         code.setReadOnly();
         Toolchain.deleteAll(out);
-        say(100, "built " + name);
-        return "Built " + name + ": play it from the list";
+        builtGame = id;
+        say(100, name + " is ready to play");
+        return name + " compiled successfully. Press Play to start it.";
     }
 
     /**
@@ -211,8 +245,10 @@ public final class BuildService extends Service {
         command.add("shaders");
         command.add(rom.getAbsolutePath());
         command.add(vertex.getAbsolutePath());
+        // precache is asked for whatever the title learned: with no list the
+        // recompiler writes the one the game's own files hold
+        command.add("precache");
         if (learned.isFile()) {
-            command.add("precache");
             command.add(learned.getAbsolutePath());
         }
         run("shaders", command);
@@ -222,27 +258,39 @@ public final class BuildService extends Service {
     private static final String LEARNED = "title-shaders.txt";
 
     /**
+     * the service going takes its wait with it, whether the thread finished
+     * or the system took it: nothing is left saying shaders are being built.
+     */
+    @Override
+    public void onDestroy() {
+        preparing = false;
+        super.onDestroy();
+    }
+
+    /**
      * a session's shaders, learned into the title's list, and the precache
      * list written from it: the vertex programs the game's files hold are all
      * known before a start, but the programs the game's drawing state makes
      * are only known once it has drawn, which is what a run's shaders.txt
      * records. A start then builds them all before the first frame.
      */
-    private void shaderLists(File folder) throws IOException {
+    private boolean shaderLists(File folder) throws IOException {
         File rom = new File(folder, "game.3ds");
         File recorded = new File(new File(folder, "data"), "shaders.txt");
         File learned = new File(folder, LEARNED);
         File precache = new File(new File(folder, "vertex"), "precache.txt");
-        if (!rom.isFile() || !recorded.isFile()) {
-            return;
+        if (!rom.isFile()) {
+            return false;
         }
         Toolchain.unpack(this);
-        if (!learned.isFile() || learned.lastModified() < recorded.lastModified()) {
+        // a title that learned nothing has no run's list to add to its own
+        if (recorded.isFile() && (!learned.isFile() || learned.lastModified() < recorded.lastModified())) {
             run("learn", Arrays.asList(Toolchain.recompiler(this).getAbsolutePath(), "learn", rom.getAbsolutePath(), recorded.getAbsolutePath(), learned.getAbsolutePath()));
         }
-        if (!precache.isFile() || precache.lastModified() < recorded.lastModified()) {
+        if (!precache.isFile() || (recorded.isFile() && precache.lastModified() < recorded.lastModified())) {
             shaders(rom, folder);
         }
+        return precache.isFile();
     }
 
     /** 3dsrecomp, its output to the log, a step that fails leaving the rest be */
@@ -292,7 +340,7 @@ public final class BuildService extends Service {
         }
         int status = process.waitFor();
         if (status != 0) {
-            throw new IOException("the recompiler stopped with " + status + ", its log is " + log);
+            throw new IOException("the recompiler stopped with " + status + ", the log is " + log);
         }
     }
 

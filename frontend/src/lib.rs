@@ -304,7 +304,20 @@ pub fn run(mut args: Vec<String>) {
     let mut logs = 0u32;
     // ZAKURO_SLOW_FRAMES=ms logs every frame that took longer to run
     let slow: Option<f64> = std::env::var("ZAKURO_SLOW_FRAMES").ok().and_then(|ms| ms.parse().ok());
-    prepare_shaders(&mut system, &font, &settings, &pad);
+    // ZAKURO_PREWARM: the launcher's start that only builds what a rebuilt
+    // list has, leaving once they are all built so that the next play starts
+    // at once. The driver's copies are kept; the title never runs. A press
+    // does not skip this one: the launcher says the shaders are built once it
+    // is back, and half a list said to be built would be a lie
+    let prewarm = std::env::var_os("ZAKURO_PREWARM").is_some();
+    let (built, total) = prepare_shaders(&mut system, &font, &settings, &pad, !prewarm);
+    if prewarm {
+        log::info!("ZAKURO_PREWARM: {built} of {total} shaders built, leaving before the game runs");
+        // what the launcher tells the person, in the game's own folder
+        let folder = std::env::var_os("ZAKURO_DATA").map(PathBuf::from).unwrap_or_default();
+        let _ = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(folder.join("prewarm.txt"), format!("{built} of {total}")));
+        input::QUIT.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     loop {
         let began = Instant::now();
         let (mut keys, mut axes, fingers, second_touch, pad_used, osh_pb, motion) = {
@@ -800,15 +813,19 @@ fn leave(code: i32) -> ! {
 /// waits for the shaders the game's list and the kit's precache list have
 /// the start build, showing how far along they are when that takes a
 /// moment, so none is built in game. B, Start or a tap skips the rest, which
-/// are built as the game needs them.
-fn prepare_shaders(system: &mut System, font: &Font, settings: &Settings, pad: &Mutex<Pad>) {
+/// are built as the game needs them, unless `skippable` is false. How many
+/// were built and how many the start had to build come back, for the
+/// launcher's start that only builds them.
+fn prepare_shaders(system: &mut System, font: &Font, settings: &Settings, pad: &Mutex<Pad>, skippable: bool) -> (usize, usize) {
     let (total, _) = zakuro_gpu::preparing();
     if total == 0 {
-        return;
+        return (0, 0);
     }
     let started = Instant::now();
     // how far along it was a few seconds in, for the time left to go by
     let mut from: Option<(Duration, usize)> = None;
+    // how many were built when the screen last moved, for a stall to be told
+    let (mut last_done, mut moving) = (0usize, Instant::now());
     // a press or release from before the screen came up is no skip: the
     // launcher's own A press is still letting go as the screen appears, and
     // taken for a new one it throws the whole list away
@@ -820,7 +837,11 @@ fn prepare_shaders(system: &mut System, font: &Font, settings: &Settings, pad: &
         pad.lifted.clear();
         (held, touched)
     };
-    while let (total, left @ 1..) = zakuro_gpu::preparing() {
+    loop {
+        let left = zakuro_gpu::preparing().1;
+        if left == 0 {
+            break;
+        }
         let (keys, touching) = {
             let mut pad = pad.lock().unwrap();
             let keys: HashSet<u16> = pad.keys.union(&pad.let_go).copied().collect();
@@ -832,15 +853,25 @@ fn prepare_shaders(system: &mut System, font: &Font, settings: &Settings, pad: &
         let pressed = [B, START].into_iter().find(|key| keys.contains(key) && !held.contains(key));
         let tapped = touching && !touched;
         (held, touched) = (keys, touching);
-        if pressed.is_some() || tapped {
+        if skippable && (pressed.is_some() || tapped) {
             zakuro_gpu::skip_preparing();
             let by = pressed.map_or("a tap".to_owned(), |key| format!("key {key}"));
             log::info!("shaders skipped with {left} of {total} left, after {:.1} s, by {by}", started.elapsed().as_secs_f64());
-            return;
+            return (total - left, total);
         }
         // the screens go up all along, the kit's list handed out as they do
         let elapsed = started.elapsed();
         let done = total - left;
+        // a driver that stops answering a compile would hold the start for
+        // good: half a minute without one built is a stall, and the rest are
+        // left for the game to build as it needs them
+        if done != last_done {
+            (last_done, moving) = (done, Instant::now());
+        } else if moving.elapsed() >= Duration::from_secs(30) {
+            log::warn!("no shader built in 30 s with {left} of {total} left, the rest are left for the game");
+            zakuro_gpu::skip_preparing();
+            return (done, total);
+        }
         if from.is_none() && elapsed >= Duration::from_secs(3) {
             from = Some((elapsed, done));
         }
@@ -853,7 +884,8 @@ fn prepare_shaders(system: &mut System, font: &Font, settings: &Settings, pad: &
         system.present_panel(layout::shown(settings), None, overlays(&screen, &None), settings.smooth, false);
         std::thread::sleep(Duration::from_millis(20));
     }
-    log::info!("prepared {} shaders in {:.1} s", zakuro_gpu::preparing().0, started.elapsed().as_secs_f64());
+    log::info!("prepared {total} shaders in {:.1} s", started.elapsed().as_secs_f64());
+    (total, total)
 }
 
 fn overlays(overlay: &Option<Arc<Overlay>>, controls: &Option<Arc<Overlay>>) -> Vec<Arc<Overlay>> {

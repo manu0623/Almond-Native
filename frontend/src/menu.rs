@@ -90,10 +90,10 @@ const TOGGLES: [(&str, fn(&mut Advanced) -> &mut bool, [&str; 2], &str); 34] = [
     ("Depth tiles on the GPU", |a| &mut a.tile_copies, ON_OFF, "Moves depth between buffers on the GPU. Try Off if shadows, fog or outlines go wrong."),
     ("Clears on the GPU", |a| &mut a.gpu_clears, ON_OFF, "Clears whole buffers on the GPU alone. Try Off for leftover pictures or black screens."),
     ("Vertex arrays on the GPU", |a| &mut a.gpu_arrays, ON_OFF, "Keeps shapes in GPU memory. Try Off if shapes flicker or break apart."),
-    ("Trust cached meshes", |a| &mut a.trust_meshes, ON_OFF, "Reuses shapes for a few pictures without reading them again. Try Off if things flicker, lag or menus glitch."),
-    ("Trust cached textures", |a| &mut a.trust_textures, ON_OFF, "Reuses textures for a few pictures without reading them again. Try Off if a texture is late to change."),
+    ("Reuse cached shapes", |a| &mut a.trust_meshes, ON_OFF, "Reuses a shape for a few pictures without reading it again. Turn Off if things flicker, lag or menus glitch."),
+    ("Reuse cached textures", |a| &mut a.trust_textures, ON_OFF, "Reuses a texture for a few pictures without reading it again. Turn Off if a texture is late to change."),
     ("Small texture cache", |a| &mut a.small_cache, ON_OFF, "Keeps a quarter of the textures, to save memory. Try Off if busy scenes stutter."),
-    ("Hide scenery out of view", |a| &mut a.cull, ON_OFF, "Skips big shapes that were not on screen a moment ago. Try Off if things pop in or flicker at the edges."),
+    ("Skip off-screen scenery", |a| &mut a.cull, ON_OFF, "Leaves out big shapes not on screen lately. Turn Off if trees pop in at the screen's edge."),
     ("Renderer", |a| &mut a.gpu_drawing, ["Software", "GPU"], "Software is far too slow to play, for telling apart whether a glitch is the GPU's."),
     ("Vertex shading", |a| &mut a.gpu_vertices, ["CPU", "GPU"], "Where shapes are shaded. Try CPU if shapes are wrong, it is slower."),
     ("Display transfers", |a| &mut a.gpu_transfers, ["CPU", "GPU"], "How pictures reach the screens. Try CPU for garbage, wrong colors or the wrong picture on a screen."),
@@ -106,7 +106,7 @@ const TOGGLES: [(&str, fn(&mut Advanced) -> &mut bool, [&str; 2], &str); 34] = [
     ("Vertex ranges", |a| &mut a.draw_ranges, ON_OFF, "Reads only the vertices a draw uses. Try Off if shapes are missing or broken."),
     ("GPU thread", |a| &mut a.gpu_thread, ON_OFF, "Draws on a core of its own. Try Off for crashes or glitches that come and go, it is slower."),
     ("Real-time GPU", |a| &mut a.realtime_gpu, ON_OFF, "Time goes on while the GPU draws, as on the console. Try On if the game runs too fast or its timing is off."),
-    ("CPU", |a| &mut a.recompiled, ["Interpreter", "Recompiled"], "The interpreter is far too slow to play, for telling apart a crash of the recompiled code."),
+    ("Game code", |a| &mut a.recompiled, ["Interpreter", "Recompiled"], "How the game's code runs. The interpreter is far too slow to play, for telling a crash of the recompiled code apart."),
     ("Exact event timing", |a| &mut a.exact_events, ON_OFF, "Runs the game's code up to each event's exact time. Try On for freezes or sound that stutters, it is a little slower."),
     ("Shader prewarm", |a| &mut a.prewarm, ON_OFF, "Builds the shaders this game used before while it starts. Try Off if it will not start."),
     ("ROM read-ahead", |a| &mut a.read_ahead, ON_OFF, "Reads the parts of the game it loaded last time ahead. Try Off if loading stalls."),
@@ -115,7 +115,7 @@ const TOGGLES: [(&str, fn(&mut Advanced) -> &mut bool, [&str; 2], &str); 34] = [
     ("Draw only shown frames", |a| &mut a.shown_only, ON_OFF, "Leaves out the frames the frame cap never shows, easing the GPU. Try Off if it stutters."),
     ("Compressed alpha textures", |a| &mut a.etc1a4, ON_OFF, "Keeps see-through compressed textures compressed too. Try Off if a game runs slower than on 0.4.0."),
     ("New 3DS mode", |a| &mut a.new3ds, ON_OFF, "Runs a game that has a New 3DS mode in it, with its extra memory and effects. Slower on most handhelds."),
-    ("While shaders build", |a| &mut a.stand_ins, ["Leave out", "Stand-in"], "Stand-in draws new things plainly at once while their shaders build, no pop-in. Leave out keeps frames faster."),
+    ("New shaders mid-game", |a| &mut a.stand_ins, ["Wait", "Stand-in"], "A new shader draws a plain stand-in until it is built, so the game never pauses. Wait draws nothing instead."),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -258,8 +258,8 @@ fn label(field: Field, settings: &Settings, game: &GameSettings, profile: &Profi
         Field::Interpolate => ("Frame interpolation", if settings.interpolate_to == 0 { "Off".into() } else { format!("Up to {} fps", settings.interpolate_to) }),
         Field::ShowFps => ("Show fps", if settings.show_fps { "On" } else { "Off" }.into()),
         Field::ShowClock => ("Clock and battery", if settings.show_clock { "On" } else { "Off" }.into()),
-        Field::ShowBuilding => ("Shader popup", if settings.show_building { "On" } else { "Off" }.into()),
-        Field::ShowSaving => ("Saving popup", if settings.show_saving { "On" } else { "Off" }.into()),
+        Field::ShowBuilding => ("Shader build box", if settings.show_building { "On" } else { "Off" }.into()),
+        Field::ShowSaving => ("Save indicator", if settings.show_saving { "On" } else { "Off" }.into()),
         Field::Rotation => {
             let rotation = match settings.rotation {
                 Rotation::Auto => "Auto",

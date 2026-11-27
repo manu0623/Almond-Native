@@ -15,6 +15,9 @@ pub(super) struct Precache {
     lines: std::collections::VecDeque<String>,
     stamp: Option<std::path::PathBuf>,
     count: usize,
+    /// lines that named no shader they could be read as, which a list from
+    /// another build of the engine is full of
+    missed: usize,
     started: std::time::Instant,
 }
 
@@ -176,7 +179,7 @@ impl Gles {
             .collect();
         let lines: std::collections::VecDeque<String> = text.lines().skip(1).map(str::to_owned).collect();
         PRECACHE_LEFT.store(lines.len(), std::sync::atomic::Ordering::Relaxed);
-        self.precache = Some(Precache { dir, listed, units: HashMap::new(), stages: HashMap::new(), lines, stamp, count: 0, started: std::time::Instant::now() });
+        self.precache = Some(Precache { dir, listed, units: HashMap::new(), stages: HashMap::new(), lines, stamp, count: 0, missed: 0, started: std::time::Instant::now() });
     }
 
     /// hands out the precache list's lines for a while, each one of the
@@ -185,7 +188,10 @@ impl Gles {
     pub(super) fn precache_some(&mut self, budget: std::time::Duration) {
         let Some(mut precache) = self.precache.take() else { return };
         if SKIP.load(std::sync::atomic::Ordering::Relaxed) {
-            log::info!("precaching skipped with {} of the list's shaders not handed out", precache.lines.len());
+            // the list is left half built, and its stamp is not written with
+            // it: the next start hands all of it out again rather than the log
+            // saying a list that was skipped was built
+            log::info!("precaching skipped with {} of the list's shaders not handed out, its stamp not written", precache.lines.len());
             PRECACHE_LEFT.store(0, std::sync::atomic::Ordering::Relaxed);
             return;
         }
@@ -228,6 +234,7 @@ impl Gles {
             // a line that builds nothing new comes off what the start shows
             let fewer = || _ = PREPARING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             let (Some(vertex), Some((constants, writes_depth, lighting))) = (stage, setup(fields)) else {
+                precache.missed += 1;
                 fewer();
                 continue;
             };
@@ -251,6 +258,11 @@ impl Gles {
             return;
         }
         log::info!("{} precached shaders from {} handed out in {:.1} s", precache.count, precache.dir.join("precache.txt").display(), precache.started.elapsed().as_secs_f64());
+        // a list whose lines no longer read is one an older build of the app
+        // wrote: it is not an error, but the shaders it held are built in game
+        if precache.missed > 0 {
+            log::warn!("{} of the list's lines name no shader this build reads, a list from another build: rebuild the shaders", precache.missed);
+        }
         if queue {
             self.precache_stamp = precache.stamp;
         } else if let Some(path) = precache.stamp {

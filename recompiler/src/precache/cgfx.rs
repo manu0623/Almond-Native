@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use super::{commands, cstr, light_regs, u16_at, u32_at, Found, COORDINATES, DISABLE, ETC1A4, FOG_MODES, STAGES, UNIT_PARAMS};
+use super::{commands, cstr, light_regs, u16_at, u32_at, Found, Line, BASE_FOG_MODES, COORDINATES, DISABLE, ETC1A4, FOG_MODES, STAGES, UNIT_PARAMS};
 use crate::shaders::{self, Shbin};
 
 /// the lookup tables, reflection red, green and blue, distribution 0 and 1
@@ -45,7 +45,7 @@ pub(super) struct Models {
 }
 
 /// each line, and how many materials give it.
-pub(super) fn lines(seen: &Found, found: &[Shbin], named: &HashSet<Vec<u8>>) -> HashMap<String, usize> {
+pub(super) fn lines(seen: &Found, found: &[Shbin], named: &HashSet<Vec<u8>>) -> HashMap<String, Line> {
     let models = &seen.cgfx;
     let mut shaders: Vec<(&str, &str, Variants)> = Vec::new();
     for (name, source, shbin) in &models.shaders {
@@ -75,7 +75,7 @@ pub(super) fn lines(seen: &Found, found: &[Shbin], named: &HashSet<Vec<u8>>) -> 
         let nearest = named.iter().map(|&k| rank(k)).min();
         named.into_iter().filter(|&k| Some(rank(k)) == nearest).collect()
     };
-    let mut lines = HashMap::new();
+    let mut lines: HashMap<String, Line> = HashMap::new();
     for material in &models.materials {
         let bound = bind(material);
         for &k in &bound {
@@ -106,27 +106,32 @@ pub(super) fn lines(seen: &Found, found: &[Shbin], named: &HashSet<Vec<u8>>) -> 
         let lit = material.flags & 1;
         let split = (0..3).filter(|&unit| material.textures[unit].as_ref().and_then(|name| seen.formats.get(name)) == Some(&ETC1A4)).fold(0, |bits, unit| bits | 1 << unit);
         let flags = enabled | split << 4 | lit << 17;
-        // shaded, and with the w buffer where a camera has one
-        let depths: &[u32] = if models.w_buffer { &[2 << 12, 3 << 12 | 1 << 16] } else { &[2 << 12] };
-        // one light, which titles set up themselves as often as not, and two
-        // where their light sets have two; sets of more are scenes' lights a
-        // draw takes one or two of
-        let counts: BTreeSet<u32> = if models.light_counts.is_empty() { BTreeSet::from([1, 2]) } else { models.light_counts.iter().copied().filter(|&count| count <= 2).chain([1]).collect() };
-        let lightings = if lit != 0 { lighting(material, &models.absolute, &counts) } else { vec![BTreeMap::new()] };
-        let mut own = HashSet::new();
-        for light in &lightings {
+        // shaded, and with the w buffer where a camera has one, and each of
+        // them again with depth written, as a depth pass or a shadow's does
+        let own_depths: &[u32] = if models.w_buffer { &[2 << 12, 3 << 12 | 1 << 16] } else { &[2 << 12] };
+        let depths: &[u32] = if models.w_buffer { &[2 << 12, 2 << 12 | 1 << 16, 3 << 12, 3 << 12 | 1 << 16] } else { &[2 << 12, 2 << 12 | 1 << 16] };
+        // every count the title's light sets have, up to the eight the
+        // hardware takes, and one for a scene with no set of its own
+        let counts: BTreeSet<u32> = if models.light_counts.is_empty() { BTreeSet::from([1, 2]) } else { models.light_counts.iter().copied().chain([1]).collect() };
+        let lightings = if lit != 0 { lighting(material, &models.absolute, &counts) } else { vec![(1, BTreeMap::new())] };
+        let mut own: BTreeMap<String, bool> = BTreeMap::new();
+        for &(count, ref light) in &lightings {
             for fog in FOG_MODES {
                 out.insert(0xE0, r(0xE0) & 0xFF00 | fog);
                 let regs: Vec<String> = out.iter().chain(light).filter(|&(&register, &value)| value != 0 && register < 0x300).map(|(register, value)| format!("{register:x}={value:x}")).collect();
+                let base = count <= 2 && BASE_FOG_MODES.contains(&fog);
                 for vertex in &vertices {
                     for depth in depths {
-                        own.insert(format!("{vertex} {:x} {}", flags | depth, regs.join(" ")));
+                        let entry = own.entry(format!("{vertex} {:x} {}", flags | depth, regs.join(" "))).or_insert(false);
+                        *entry |= base && own_depths.contains(depth);
                     }
                 }
             }
         }
-        for line in own {
-            *lines.entry(line).or_default() += 1;
+        for (line, base) in own {
+            let entry = lines.entry(line).or_default();
+            entry.rank += 1;
+            entry.base |= base;
         }
     }
     println!("{} NintendoWare materials, their shaders {paired:?}, light sets of {:?}{}", models.materials.len(), models.light_counts, if models.w_buffer { ", a w buffer" } else { "" });
@@ -135,7 +140,7 @@ pub(super) fn lines(seen: &Found, found: &[Shbin], named: &HashSet<Vec<u8>>) -> 
 
 /// the lighting the library sets up for a material: its tables, fresnel
 /// and bump, under as many directional lights as the title's scenes have.
-fn lighting(material: &Material, absolute: &HashMap<(String, String), BTreeSet<bool>>, counts: &BTreeSet<u32>) -> Vec<BTreeMap<usize, u32>> {
+fn lighting(material: &Material, absolute: &HashMap<(String, String), BTreeSet<bool>>, counts: &BTreeSet<u32>) -> Vec<(u32, BTreeMap<usize, u32>)> {
     let [flags, layer, fresnel, bump_unit, bump, renormalize] = material.lighting;
     let used = [flags >> 5 & 1 != 0, flags >> 5 & 1 != 0, flags >> 5 & 1 != 0, flags >> 1 & 1 != 0, flags >> 2 & 1 != 0, fresnel != 0];
     let mut config0 = 0x8000_0400 | (layer & 0xF) << 4 | (fresnel & 1) << 2 | (fresnel >> 1 & 1) << 3 | (flags & 1) << 27 | (bump_unit & 3) << 22 | (bump & 3) << 28;
@@ -160,7 +165,7 @@ fn lighting(material: &Material, absolute: &HashMap<(String, String), BTreeSet<b
     let mut out = Vec::new();
     for &count in counts {
         for &bits in &absolutes {
-            out.push(light_regs(config0, config1, [bits, inputs, scales], light, count));
+            out.push((count, light_regs(config0, config1, [bits, inputs, scales], light, count)));
         }
     }
     out
@@ -289,7 +294,8 @@ mod tests {
         let absolute = HashMap::from([(names("body_D0"), BTreeSet::from([true])), (names("body_D1"), BTreeSet::from([true]))]);
         let setups = lighting(&material, &absolute, &BTreeSet::from([1, 2]));
         assert_eq!(setups.len(), 2);
-        let two = &setups[1];
+        assert_eq!(setups[1].0, 2);
+        let two = &setups[1].1;
         let expected = [(0x1C2, 1), (0x1C3, 0x8000_0420), (0x1C4, 0xFF7C_FFFF), (0x1D0, 0), (0x1D1, 0x20), (0x1D2, 0x10), (0x1D9, 0x10), (0x149, 9), (0x159, 9)];
         for (register, value) in expected {
             assert_eq!(two[&register], value, "{register:x}");

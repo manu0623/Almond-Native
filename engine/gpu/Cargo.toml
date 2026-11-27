@@ -2,6 +2,7 @@
 name = "zakuro-gpu"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [features]
@@ -9,10 +10,8 @@ default = []
 gles = ["dep:glow", "dep:glutin_egl_sys", "dep:libloading"]
 
 [dependencies]
-zakuro-common.workspace = true
 log.workspace = true
 bitflags.workspace = true
-thiserror.workspace = true
 rayon.workspace = true
 wide = "1.7"
 libc = "0.2"

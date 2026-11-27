@@ -29,16 +29,34 @@ const COORDINATES: [u32; 6] = [0, 0x2000, 0x2100, 0x2200, 0x100, 0x200];
 /// the bit that turns each lookup table off: reflection red, green and blue,
 /// distribution 0 and 1 and fresnel.
 const DISABLE: [u32; 6] = [20, 21, 22, 16, 17, 19];
-/// the scene's fog, which the titles set from their own code.
-const FOG_MODES: [u32; 2] = [0, 5];
+/// the fog the list works out for a material that asks for it: off and every
+/// mode the hardware takes, since the scene's fog, which the titles set from
+/// their own code, is one the material's drawing may or may not have.
+const FOG_MODES: [u32; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+/// the modes it had before the others were worked out too: off, and 5, the
+/// one the engine draws, the other one, 7, being gas.
+const BASE_FOG_MODES: [u32; 2] = [0, 5];
 const ETC1A4: u32 = 13;
-/// at most this many, the lists' first, then those the most materials share.
-/// Kept above what the biggest titles work out (Zelda: A Link Between Worlds
-/// has 2770) so that a pairing its models need is prepared at the start and
-/// not built in game, where a first compile costs about a third of a second
-/// on a Mali-G31 and a tenth on an Adreno: the cap is only a stop for a title
-/// that works out more than any of them ever has.
-const MOST: usize = 4000;
+/// at most this many, every line a material asks for itself first, then the
+/// variants a pass may set, the most shared first: a variant must not crowd
+/// out a line a model needs, which is the one built in game otherwise, a
+/// first compile costing about a third of a second on a Mali-G31 and a tenth
+/// on an Adreno, and a program the list leaves out drawn as a plain stand-in
+/// until it is built, which a tree pops in late for. A bigger list is a
+/// longer start, which is the better trade against hitches in play.
+const MOST: usize = 8000;
+
+/// a line of the list: how far up it stands, and whether it is what a
+/// material asks for itself rather than a variant a pass may set, with depth
+/// written, more lights or another fog mode than the material's own.
+///
+/// The rank is how many materials give the line, a title's own list standing
+/// above every material's, so that the lines of the lists are kept first.
+#[derive(Default)]
+pub(super) struct Line {
+    rank: usize,
+    base: bool,
+}
 
 /// what a title's files hold.
 #[derive(Default)]
@@ -51,9 +69,13 @@ struct Found {
 
 /// writes precache.txt into dir, each line a vertex shader of the list
 /// write_vertex_list made from found, file:entry, and a setup as the
-/// engine's own list keeps them: the title's own list first, then the lines
-/// of the other titles' lists whose shaders this one has too, then what its
-/// models need, the most shared first. how many lines, none for a title with
+/// engine's own list keeps them: the title's own list, the lines of the other
+/// titles' lists whose shaders this one has too, and what its models need,
+/// each with the variants a pass may set too. the lines are kept in rounds
+/// over the vertex shaders they name, every material's own before any
+/// variant and one line of every shader before a second of any: a shader the
+/// list leaves out is every one of its programs built in game, where a first
+/// compile costs a tenth of a second. how many lines, none for a title with
 /// none of them, which writes nothing.
 pub fn write(title: &Title, found: &[Shbin], dir: &Path, lists: &[&Path]) -> std::io::Result<usize> {
     let mut seen = Found::default();
@@ -68,18 +90,67 @@ pub fn write(title: &Title, found: &[Shbin], dir: &Path, lists: &[&Path]) -> std
     let mut lines = cgfx::lines(&seen, found, &named);
     bch::lines(&seen, found, &mut lines);
     lists::add(title, found, dir, lists, &mut lines)?;
-    let mut lines: Vec<(String, usize)> = lines.into_iter().collect();
+    let lines: Vec<(String, Line)> = lines.into_iter().collect();
     if lines.is_empty() {
         return Ok(0);
     }
-    lines.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let (kept, shaders) = kept_under(&lines, MOST);
     if lines.len() > MOST {
-        println!("{} shaders worked out, the {MOST} the most materials share kept", lines.len());
-        lines.truncate(MOST);
+        println!("{} shaders worked out over {shaders} vertex shaders, the {MOST} kept: every shader's own first, then the most shared variants", lines.len());
     }
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join("precache.txt"), std::iter::once(HEADER).chain(lines.iter().map(|(line, _)| line.as_str())).collect::<Vec<_>>().join("\n") + "\n")?;
-    Ok(lines.len())
+    // whole or not at all: a list half written reads as a whole one that is
+    // missing lines, whose shaders would then be built in game
+    let text = std::iter::once(HEADER).chain(kept.iter().copied()).collect::<Vec<_>>().join("\n") + "\n";
+    crate::whole::write(&dir.join("precache.txt"), text.as_bytes())?;
+    Ok(kept.len())
+}
+
+/// the lines to keep out of all those worked out, at most `most` of them,
+/// and how many vertex shaders they name: a round of every shader's own
+/// lines first, one from each, then a round of its variants the same way, so
+/// that a shader with a few thousand variants cannot take another's own line
+/// out of the list. Within a round the most shared go first, and lines given
+/// alike go by the line itself, so that the same title writes the same list
+/// every time.
+pub(super) fn kept_under<'a>(lines: &'a [(String, Line)], most: usize) -> (Vec<&'a str>, usize) {
+    // by the vertex shader each line names, its own kept apart from its
+    // variants: a title's list leads with file:entry, a model's with the
+    // shader's own number, both naming the same shader
+    let mut groups: BTreeMap<&str, (Vec<(&str, usize)>, Vec<(&str, usize)>)> = BTreeMap::new();
+    for (line, rank) in lines {
+        let vertex = line.split([' ', ':']).next().unwrap_or_default();
+        let group = groups.entry(vertex).or_default();
+        let laid = if rank.base { &mut group.0 } else { &mut group.1 };
+        laid.push((line.as_str(), rank.rank));
+    }
+    for (own, variants) in groups.values_mut() {
+        for laid in [own, variants] {
+            laid.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+            laid.reverse();
+        }
+    }
+    // a round of every shader's own, then a round of every shader's variants,
+    // until the lines run out or the budget is spent
+    let shaders = groups.len();
+    let mut kept: Vec<&str> = Vec::with_capacity(most.min(lines.len()));
+    for own in [true, false] {
+        loop {
+            let mut took = false;
+            for (their, variants) in groups.values_mut() {
+                if kept.len() >= most {
+                    break;
+                }
+                if let Some((line, _)) = (if own { their } else { variants }).pop() {
+                    kept.push(line);
+                    took = true;
+                }
+            }
+            if !took || kept.len() >= most {
+                break;
+            }
+        }
+    }
+    (kept, shaders)
 }
 
 /// the lighting registers for config 0 and 1, the tables' absolutes,
@@ -140,5 +211,39 @@ mod tests {
         commands(&words, 0, 4, &mut regs).unwrap();
         assert_eq!(regs[&0x107], 0x1F41);
         assert_eq!(regs[&0x126], 0x0300_0000);
+    }
+
+    fn line(text: &str, base: bool, rank: usize) -> (String, Line) {
+        (text.to_owned(), Line { rank, base })
+    }
+
+    #[test]
+    fn a_shaders_own_line_is_kept_before_anothers_variants() {
+        // one shader with thousands of variants beside one with a single own
+        // line: the budget must not be spent on the variants alone
+        let mut lines = vec![line("1 0", true, 1), line("0 own", false, 900)];
+        for more in 0..5 {
+            lines.push(line(&format!("0 v{more}"), false, 800 - more));
+        }
+        let (kept, shaders) = kept_under(&lines, 3);
+        assert_eq!(shaders, 2);
+        assert_eq!(kept, vec!["1 0", "0 own", "0 v0"]);
+    }
+
+    #[test]
+    fn the_most_shared_go_first_and_alike_lines_by_their_own() {
+        let lines = vec![line("0 b", true, 5), line("0 a", true, 5), line("0 c", true, 9)];
+        let (kept, _) = kept_under(&lines, 10);
+        assert_eq!(kept, vec!["0 c", "0 a", "0 b"]);
+    }
+
+    #[test]
+    fn a_lists_line_and_a_models_line_name_the_same_shader() {
+        // a title's list leads with file:entry, a model's with the shader's
+        // own number: both name one shader, and are kept as its own
+        let lines = vec![line("0 0", true, 1), line("0:1a 0", true, usize::MAX)];
+        let (kept, shaders) = kept_under(&lines, 1);
+        assert_eq!(shaders, 1);
+        assert_eq!(kept, vec!["0:1a 0"]);
     }
 }

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use super::{commands, cstr, light_regs, u16_at, u32_at, Found, COORDINATES, DISABLE, ETC1A4, FOG_MODES, STAGES, UNIT_PARAMS};
+use super::{commands, cstr, light_regs, u16_at, u32_at, Found, Line, BASE_FOG_MODES, COORDINATES, DISABLE, ETC1A4, FOG_MODES, STAGES, UNIT_PARAMS};
 use crate::shaders::{self, Shbin};
 
 /// an H3D material: the registers its commands set, its flags, the
@@ -32,9 +32,11 @@ pub(super) struct Models {
 
 /// the materials' lines into lines, each with every shader of the name it
 /// gives, which the game binds as it loads them.
-pub(super) fn lines(seen: &Found, found: &[Shbin], lines: &mut HashMap<String, usize>) {
+pub(super) fn lines(seen: &Found, found: &[Shbin], lines: &mut HashMap<String, Line>) {
     let models = &seen.bch;
-    let counts: BTreeSet<u32> = models.light_counts.iter().copied().filter(|&count| count <= 2).chain([1]).collect();
+    // every count the title's light sets have, up to the eight the hardware
+    // takes, and one for a scene with no set of its own
+    let counts: BTreeSet<u32> = models.light_counts.iter().copied().chain([1]).collect();
     let (mut paired, mut unpaired) = (0, 0);
     for material in &models.materials {
         let Some((index, name)) = material.shader.split_once('@') else { continue };
@@ -73,22 +75,31 @@ pub(super) fn lines(seen: &Found, found: &[Shbin], lines: &mut HashMap<String, u
         }
         let lit = material.flags & 1;
         let split = (0..3).filter(|&unit| used(unit) && material.textures[unit].as_ref().and_then(|name| seen.formats.get(name)) == Some(&ETC1A4)).fold(0, |bits, unit| bits | 1 << unit);
-        let flags = enabled | split << 4 | 2 << 12 | lit << 17;
-        let lightings = if lit != 0 { lighting(material, &counts) } else { vec![BTreeMap::new()] };
+        let flags = enabled | split << 4 | lit << 17;
+        let lightings = if lit != 0 { lighting(material, &counts) } else { vec![(1, BTreeMap::new())] };
         // the fog the material asks for, which the scene's may be or not
         let fogs: &[u32] = if material.flags & 0x10 != 0 { &FOG_MODES } else { &[0] };
-        let mut own = HashSet::new();
-        for light in &lightings {
+        // and what a pass of the title's sets that the material does not: the
+        // same drawing with depth written, as a depth pass or a shadow's does
+        let depths: [u32; 2] = [2 << 12, 2 << 12 | 1 << 16];
+        let mut own: BTreeMap<String, bool> = BTreeMap::new();
+        for &(count, ref light) in &lightings {
             for &fog in fogs {
                 out.insert(0xE0, r(0xE0) & 0xFFFF8 | fog);
                 let regs: Vec<String> = out.iter().chain(light).filter(|&(&register, &value)| value != 0 && register < 0x300).map(|(register, value)| format!("{register:x}={value:x}")).collect();
+                let base = count <= 2 && BASE_FOG_MODES.contains(&fog);
                 for vertex in &vertices {
-                    own.insert(format!("{vertex} {flags:x} {}", regs.join(" ")));
+                    for depth in depths {
+                        let entry = own.entry(format!("{vertex} {:x} {}", flags | depth, regs.join(" "))).or_insert(false);
+                        *entry |= base && depth == depths[0];
+                    }
                 }
             }
         }
-        for line in own {
-            *lines.entry(line).or_default() += 1;
+        for (line, base) in own {
+            let entry = lines.entry(line).or_default();
+            entry.rank += 1;
+            entry.base |= base;
         }
     }
     if !models.materials.is_empty() {
@@ -97,8 +108,8 @@ pub(super) fn lines(seen: &Found, found: &[Shbin], lines: &mut HashMap<String, u
 }
 
 /// what the runtime sets up for a material's lighting, its tables' inputs,
-/// scales and absolutes being its own commands'.
-fn lighting(material: &Material, counts: &BTreeSet<u32>) -> Vec<BTreeMap<usize, u32>> {
+/// scales and absolutes being its own commands', each with how many lights.
+fn lighting(material: &Material, counts: &BTreeSet<u32>) -> Vec<(u32, BTreeMap<usize, u32>)> {
     let fragment = material.fragment;
     let reflection = fragment >> 4 & 1 != 0;
     let used = [reflection, reflection, reflection, fragment >> 2 & 1 != 0, fragment >> 3 & 1 != 0, material.fresnel != 0];
@@ -109,7 +120,7 @@ fn lighting(material: &Material, counts: &BTreeSet<u32>) -> Vec<BTreeMap<usize, 
     let config1 = (0..6).filter(|&table| !used[table]).fold(0xFF04_FFFFu32, |config, table| config | 1 << DISABLE[table]);
     let light = 1 | (fragment >> 5 & 1) << 2 | (fragment >> 6 & 1) << 3;
     let given = [0x1D0, 0x1D1, 0x1D2].map(|register| material.regs.get(&register).copied().unwrap_or(0));
-    counts.iter().map(|&count| light_regs(config0, config1, given, light, count)).collect()
+    counts.iter().map(|&count| (count, light_regs(config0, config1, given, light, count))).collect()
 }
 
 /// a BCH's materials, textures' formats and shaders, its pointers made
