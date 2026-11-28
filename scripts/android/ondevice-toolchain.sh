@@ -3,8 +3,14 @@
 # device the two pieces a game's build needs that no phone ships: a C
 # compiler, which 3dsrecomp hands its generated code to (recompiler/src/
 # compile.rs takes CC and AR from the environment), and 3dsrecomp itself,
-# built for the device's own CPU. Nothing here is used by the app yet: this is
-# what an in-app build service would carry, unpacked into its own storage.
+# built for the device's own CPU. It is a test bench: the prefix it fetches is
+# also what scripts/android/pack_toolchain.sh packs into the APK, whose
+# BuildService runs the same compiler from the app's own storage.
+#
+# Every package is checked against the SHA256 the Termux index lists for it,
+# and the index against the SHA256 its Release file lists, so a download that
+# was cut short or changed on the way is refused instead of packed. What was
+# taken is written to <work>/packages.lock, one "name version sha256" a line.
 #
 # The compiler is Termux's, built to run on Android's Bionic: clang and lld
 # with the LLVM library they load and the NDK's sysroot, about 460 MB
@@ -30,7 +36,7 @@ while [ $# -gt 0 ]; do
         --device) device="$2"; shift 2 ;;
         --work) work="$2"; shift 2 ;;
         --recompiler) recompiler="$2"; shift 2 ;;
-        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
         *) echo "unknown option $1"; exit 2 ;;
     esac
 done
@@ -53,7 +59,7 @@ if [ ! -d "$prefix/data/data/com.termux/files/usr/lib" ]; then
     echo "== fetching Termux's clang, lld, LLVM and sysroot into $prefix"
     python3 - "$debs" "$prefix" <<'PY'
 """clang for Android, and everything it loads, from the Termux pool."""
-import gzip, io, re, sys, tarfile, urllib.request, pathlib
+import gzip, hashlib, io, re, sys, tarfile, urllib.request, pathlib
 
 REPO = "https://packages.termux.dev/apt/termux-main"
 debs, prefix = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
@@ -63,7 +69,28 @@ def fetch(url, timeout=900):
     return urllib.request.urlopen(url, timeout=timeout).read()
 
 
-index = gzip.decompress(fetch(f"{REPO}/dists/stable/main/binary-aarch64/Packages.gz", 300)).decode("utf-8", "replace")
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+# the index, checked against the hash the Release file gives for it
+release = fetch(f"{REPO}/dists/stable/Release", 300).decode("utf-8", "replace")
+INDEX = "main/binary-aarch64/Packages.gz"
+listed = None
+in_sha256 = False
+for line in release.splitlines():
+    if not line.startswith(" "):
+        in_sha256 = line.startswith("SHA256:")
+        continue
+    parts = line.split()
+    if in_sha256 and len(parts) == 3 and parts[2] == INDEX:
+        listed = parts[0].lower()
+if listed is None:
+    sys.exit(f"the Release file lists no SHA256 for {INDEX}")
+packed_index = fetch(f"{REPO}/dists/stable/{INDEX}", 300)
+if sha256(packed_index) != listed:
+    sys.exit(f"{INDEX} does not match the SHA256 the Release file lists for it")
+index = gzip.decompress(packed_index).decode("utf-8", "replace")
 packages = {}
 for block in index.split("\n\n"):
     fields = {}
@@ -104,16 +131,28 @@ def members(data):
 
 wanted = closure("clang")
 print(f"   {len(wanted)} packages: {' '.join(wanted)}")
+lock = []
 for name in wanted:
-    filename = packages[name]["Filename"]
+    fields = packages[name]
+    filename = fields["Filename"]
+    expected = fields.get("SHA256", "").lower()
+    if not expected:
+        sys.exit(f"the index lists no SHA256 for {name}")
     cached = debs / pathlib.Path(filename).name
-    if not cached.exists():
+    data = cached.read_bytes() if cached.exists() else None
+    # a cached copy from an earlier run, or one cut short, is fetched again
+    if data is None or sha256(data) != expected:
         print(f"   {filename}")
-        cached.write_bytes(fetch(f"{REPO}/{filename}"))
-    for member, body in members(cached.read_bytes()):
+        data = fetch(f"{REPO}/{filename}")
+        if sha256(data) != expected:
+            sys.exit(f"{filename} does not match the SHA256 the index lists for it")
+        cached.write_bytes(data)
+    lock.append(f"{name} {fields.get('Version', '?')} {expected}")
+    for member, body in members(data):
         if member.startswith("data.tar"):
             with tarfile.open(fileobj=io.BytesIO(body), mode="r:*") as tar:
                 tar.extractall(prefix, filter="data")
+(debs.parent / "packages.lock").write_text("\n".join(lock) + "\n")
 print(f"   {sum(f.stat().st_size for f in prefix.rglob('*') if f.is_file()) // (1024 * 1024)} MB unpacked")
 PY
 fi

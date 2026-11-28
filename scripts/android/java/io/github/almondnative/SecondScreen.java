@@ -80,6 +80,29 @@ public final class SecondScreen implements SurfaceHolder.Callback, View.OnTouchL
         return true;
     }
 
+    /**
+     * the screen taken off its display while the game is in the background:
+     * a Presentation is a window of its own there, and left up it covers the
+     * launcher's bottom screen with the game's. Its surface goes with it, so
+     * the renderer lets go of it through surfaceGone.
+     */
+    public static void hide() {
+        if (shown != null) {
+            shown.hide();
+        }
+    }
+
+    /** the screen back on its display once the game is in front again, a new surface for the renderer. */
+    public static void reshow() {
+        if (shown != null) {
+            try {
+                shown.show();
+            } catch (WindowManager.InvalidDisplayException error) {
+                Log.w("AlmondNative", "the second screen's display is gone", error);
+            }
+        }
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
     }

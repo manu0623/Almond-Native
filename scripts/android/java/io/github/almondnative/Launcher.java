@@ -91,6 +91,7 @@ import org.json.JSONObject;
  * own storage, read only, where Android lets an app load code from.
  */
 public final class Launcher extends Activity {
+    private static final String TAG = "AlmondNative";
     // the app's palette: one dark surface, cards a shade above it, and one
     // accent, the same ones the menu in game paints itself with
     private static final int GREY = 0xFF1B2534;
@@ -133,6 +134,15 @@ public final class Launcher extends Activity {
     private File waiting;
     /** the game a rebuild's shaders are building in, reported when it comes back. */
     private File warming;
+
+    /**
+     * the game was asked for from outside this list - by Arcoon, by a shortcut on
+     * the home screen - so the list only hands it over. Left behind, it is what the
+     * game's close returns to, and the person lands on Almond's own page rather than
+     * on whatever asked for the game; it steps out of the task stack instead, once
+     * the game is up.
+     */
+    private boolean handedOff;
     private GameList list;
     /** the wall of covers, which takes the pad's focus when no page is open. */
     private GridView grid;
@@ -291,6 +301,7 @@ public final class Launcher extends Activity {
         grid.requestFocus();
         playShortcut(getIntent());
         buildShortcut(getIntent());
+        buildRequested(getIntent());
         viewed(getIntent());
     }
 
@@ -307,16 +318,35 @@ public final class Launcher extends Activity {
         }
     }
 
+    /**
+     * a dump another app asks to have built, in the intent's data: how Arcoon
+     * hands over a game this app has not built yet. The dump is read through
+     * the grant that came with the intent, so the build copies it in at once.
+     * A pack file (game.3ds and title.so already built) still comes through
+     * VIEW instead.
+     */
+    private void buildRequested(Intent intent) {
+        Uri uri = intent.getData();
+        if (!BuildService.ACTION_BUILD.equals(intent.getAction()) || uri == null) {
+            return;
+        }
+        setIntent(new Intent());
+        build(uri);
+    }
+
     /** a game from a shortcut on the home screen, its folder in the extra. */
     private void playShortcut(Intent intent) {
         String game = intent.getStringExtra("game");
         if (PLAY_GAME.equals(intent.getAction()) && game != null) {
             setIntent(new Intent());
             if (new File(game, "game.3ds").isFile() && intent.getBooleanExtra("again", false)) {
+                handedOff = true;
                 playAgain(new File(game));
             } else if (new File(game, "game.3ds").isFile()) {
+                handedOff = true;
                 play(new File(game));
             } else {
+                handedOff = false;
                 Toast.makeText(this, "That game is not here any more", Toast.LENGTH_LONG).show();
             }
         }
@@ -939,7 +969,8 @@ public final class Launcher extends Activity {
             long[] had = played(folder);
             try (FileOutputStream out = new FileOutputStream(playedFile(folder))) {
                 out.write((had[0] + seconds + " " + Math.max(started, had[1])).getBytes(StandardCharsets.UTF_8));
-            } catch (IOException ignored) {
+            } catch (IOException error) {
+                Log.w(TAG, "could not save the time played for " + folder, error);
             }
         }
         since.delete();
@@ -1195,7 +1226,7 @@ public final class Launcher extends Activity {
             text = "nothing was written down: " + error;
         }
         said.delete();
-        Log.i("AlmondNative", name + ": " + text.replace("\n", " | "));
+        Log.i(TAG, name + ": " + text.replace("\n", " | "));
         asks().setTitle(title).setMessage(text).setPositiveButton("OK", null).show();
     }
 
@@ -1215,7 +1246,7 @@ public final class Launcher extends Activity {
                     // the cover read out of the dump where it has none yet: the
                     // banner's icon, as the 3DS's own home menu shows it
                     if (!new File(folder, "icon.png").isFile()) {
-                        banner(new File(folder, "game.3ds"), folder);
+                        Rom.banner(new File(folder, "game.3ds"), folder);
                     }
                     // its dump in the games folder, where the folder here is
                     // one a build left behind without its code
@@ -1351,6 +1382,7 @@ public final class Launcher extends Activity {
                 }
             }
         } catch (IOException ignored) {
+            // a title with no profile of its own
         }
         return null;
     }
@@ -1546,6 +1578,7 @@ public final class Launcher extends Activity {
     private void play(File folder, boolean menu) {
         // a start reads the list once, at once: one still being written is no list
         if (BuildService.isPreparing() || warming != null) {
+            handedOff = false;
             Toast.makeText(this, "The shaders are still being built. One moment.", Toast.LENGTH_LONG).show();
             return;
         }
@@ -1569,7 +1602,8 @@ public final class Launcher extends Activity {
                         settlePlaytime();
                         playAgain(folder, menu);
                     })
-                    .setNegativeButton("Cancel", null)
+                    .setNegativeButton("Cancel", (dialog, which) -> handedOff = false)
+                    .setOnCancelListener(dialog -> handedOff = false)
                     .show();
         }
     }
@@ -1612,7 +1646,8 @@ public final class Launcher extends Activity {
             // when this game started, which onResume turns into its time played
             try (FileOutputStream out = new FileOutputStream(playingSince())) {
                 out.write(String.valueOf(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
-            } catch (IOException ignored) {
+            } catch (IOException error) {
+                Log.w(TAG, "could not note when the game started, its time played is not counted", error);
             }
         }
         Intent intent = new Intent(this, Game.class);
@@ -1628,6 +1663,14 @@ public final class Launcher extends Activity {
         ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
         startActivity(intent, options.toBundle());
+        if (handedOff && !warm) {
+            // the game's task is up and this one is not the page behind it: gone, the game's
+            // close gives back the app that asked for it rather than this list. A task left
+            // with nothing in it goes with it, so finish() is enough and never reaches into a
+            // task the game shares, as Reset's second start can.
+            handedOff = false;
+            finish();
+        }
     }
 
     /**
@@ -1854,7 +1897,7 @@ public final class Launcher extends Activity {
             // folder costs nothing and never copies gigabytes twice
             String known;
             try (InputStream header = open(tree, rom.id)) {
-                known = titleId(header);
+                known = Rom.titleId(header);
             }
             if (new File(new File(new File(volumes().get(0), "games"), known), "game.3ds").isFile()) {
                 String title = profileName(known);
@@ -1997,7 +2040,7 @@ public final class Launcher extends Activity {
 
     /** an incoming game in its place: its folder named by its title id, its code read only in the app's own storage. */
     private void settle(File incoming) throws IOException {
-        String id = titleId(new File(incoming, "game.3ds"));
+        String id = Rom.titleId(new File(incoming, "game.3ds"));
         File code = codeFor(id);
         code.getParentFile().mkdirs();
         code.setWritable(true);
@@ -2008,7 +2051,7 @@ public final class Launcher extends Activity {
         }
         code.setReadOnly();
         copied.delete();
-        banner(new File(incoming, "game.3ds"), incoming);
+        Rom.banner(new File(incoming, "game.3ds"), incoming);
         File folder = new File(incoming.getParentFile(), id);
         if (folder.isDirectory()) {
             // a game added again keeps its saves and settings
@@ -2056,106 +2099,6 @@ public final class Launcher extends Activity {
         file.delete();
     }
 
-    /** the title id in a decrypted .3ds's header, as 16 hex digits. */
-    private static String titleId(File rom) throws IOException {
-        try (RandomAccessFile in = new RandomAccessFile(rom, "r")) {
-            byte[] header = new byte[0x110];
-            in.readFully(header);
-            return titleId(header);
-        }
-    }
-
-    /** the title id in a decrypted .3ds's first 0x110 bytes, as 16 hex digits. */
-    private static String titleId(byte[] header) throws IOException {
-        if (header[0x100] != 'N' || header[0x101] != 'C' || header[0x102] != 'S' || header[0x103] != 'D') {
-            throw new IOException("game.3ds is not a decrypted .3ds");
-        }
-        long id = 0;
-        for (int i = 7; i >= 0; i--) {
-            id = (id << 8) | (header[0x108 + i] & 0xFF);
-        }
-        return String.format("%016X", id);
-    }
-
-    /** the title id of a game in a picked folder, from as much of its header as the folder gives. */
-    private static String titleId(InputStream in) throws IOException {
-        byte[] header = new byte[0x110];
-        int at = 0;
-        while (at < header.length) {
-            int read = in.read(header, at, header.length - at);
-            if (read < 0) {
-                throw new IOException("game.3ds is too short to read");
-            }
-            at += read;
-        }
-        return titleId(header);
-    }
-
-    /** name.txt and icon.png from the game's banner, its SMDH, when it has one. */
-    private static void banner(File rom, File folder) {
-        try (RandomAccessFile in = new RandomAccessFile(rom, "r")) {
-            long first = u32(in, 0x120) * 0x200;
-            byte[] magic = new byte[4];
-            in.seek(first + 0x100);
-            in.readFully(magic);
-            if (!"NCCH".equals(new String(magic, StandardCharsets.US_ASCII))) {
-                return;
-            }
-            long exefs = first + u32(in, first + 0x1A0) * 0x200;
-            for (int entry = 0; entry < 10; entry++) {
-                byte[] name = new byte[8];
-                in.seek(exefs + entry * 16);
-                in.readFully(name);
-                if (!new String(name, StandardCharsets.US_ASCII).startsWith("icon")) {
-                    continue;
-                }
-                long offset = u32(in, exefs + entry * 16 + 8);
-                byte[] smdh = new byte[0x36C0];
-                in.seek(exefs + 0x200 + offset);
-                in.readFully(smdh);
-                if (smdh[0] != 'S' || smdh[1] != 'M' || smdh[2] != 'D' || smdh[3] != 'H') {
-                    return;
-                }
-                for (int language : new int[] {1, 0}) {
-                    int at = 0x8 + language * 0x200;
-                    String title = new String(smdh, at, 0x80, StandardCharsets.UTF_16LE).split("\0")[0].trim().replaceAll("\\s+", " ");
-                    if (!title.isEmpty()) {
-                        try (OutputStream out = new FileOutputStream(new File(folder, "name.txt"))) {
-                            out.write(title.getBytes(StandardCharsets.UTF_8));
-                        }
-                        break;
-                    }
-                }
-                // the large icon: 48x48 RGB565, in 8x8 tiles, each in Morton order
-                int[] pixels = new int[48 * 48];
-                for (int index = 0; index < 48 * 48; index++) {
-                    int tile = index / 64, inside = index % 64;
-                    int x = (tile % 6) * 8, y = (tile / 6) * 8;
-                    for (int bit = 0; bit < 3; bit++) {
-                        x += ((inside >> (2 * bit)) & 1) << bit;
-                        y += ((inside >> (2 * bit + 1)) & 1) << bit;
-                    }
-                    int value = (smdh[0x24C0 + index * 2] & 0xFF) | ((smdh[0x24C0 + index * 2 + 1] & 0xFF) << 8);
-                    int r = (value >> 11) & 31, g = (value >> 5) & 63, b = value & 31;
-                    pixels[y * 48 + x] = Color.rgb((r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2));
-                }
-                Bitmap icon = Bitmap.createBitmap(pixels, 48, 48, Bitmap.Config.ARGB_8888);
-                try (OutputStream out = new FileOutputStream(new File(folder, "icon.png"))) {
-                    icon.compress(Bitmap.CompressFormat.PNG, 100, out);
-                }
-                return;
-            }
-        } catch (IOException ignored) {
-        }
-    }
-
-    private static long u32(RandomAccessFile in, long at) throws IOException {
-        in.seek(at);
-        byte[] bytes = new byte[4];
-        in.readFully(bytes);
-        return (bytes[0] & 0xFFL) | ((bytes[1] & 0xFFL) << 8) | ((bytes[2] & 0xFFL) << 16) | ((bytes[3] & 0xFFL) << 24);
-    }
-
     /** the profiles in the app, unpacked into its own storage once a version. */
     private void unpackProfiles() {
         File titles = new File(getFilesDir(), "titles");
@@ -2176,7 +2119,9 @@ public final class Launcher extends Activity {
                 }
             }
             prefs().edit().putString("profiles", version).apply();
-        } catch (IOException ignored) {
+        } catch (IOException error) {
+            // left unmarked, so the next start tries again
+            Log.w(TAG, "could not unpack the games' profiles", error);
         }
     }
 
@@ -2255,7 +2200,9 @@ public final class Launcher extends Activity {
                         flag.getParentFile().mkdirs();
                         try {
                             new FileOutputStream(flag).close();
-                        } catch (IOException ignored) {
+                        } catch (IOException error) {
+                            Log.w(TAG, "could not save " + flag, error);
+                            Toast.makeText(this, "That setting could not be saved", Toast.LENGTH_SHORT).show();
                         }
                     }
                 }));
@@ -2300,8 +2247,8 @@ public final class Launcher extends Activity {
         section.addView(name);
         TextView about = new TextView(this);
         about.setText(folder == null
-                ? "Not set. Pick the folder on this device your games are kept in: the .3ds dumps in it are listed to build here, and built games in it are added."
-                : gamesFolderName(folder) + "\nIts .3ds dumps are listed as Build needed; Scan now finds the new ones.");
+                ? "Not set. Pick the folder on this device your games are kept in: the game dumps in it (.3ds, .cci, .cia, .cxi, decrypted) are listed to build here, and built games in it are added."
+                : gamesFolderName(folder) + "\nIts game dumps are listed as Build needed; Scan now finds the new ones.");
         about.setTextColor(DIM);
         about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         about.setLineSpacing(dp(2), 1f);
@@ -2338,7 +2285,7 @@ public final class Launcher extends Activity {
             for (Document dump : found) {
                 String id;
                 try (InputStream header = open(tree, dump.id)) {
-                    id = titleId(header);
+                    id = Rom.titleId(header);
                 } catch (IOException not) {
                     continue;
                 }
@@ -2348,17 +2295,17 @@ public final class Launcher extends Activity {
                 dumps.append(id).append(' ').append(DocumentsContract.buildDocumentUriUsingTree(tree, dump.id)).append('\n');
             }
             prefs().edit().putString("dumps", dumps.toString()).apply();
-            String foundText = ids.isEmpty() ? "no .3ds dumps" : ids.size() == 1 ? "1 game" : ids.size() + " games";
+            String foundText = ids.isEmpty() ? "no game dumps" : ids.size() == 1 ? "1 game" : ids.size() + " games";
             String addedText = added == 0 ? "" : ", " + (added == 1 ? "1 built game added" : added + " built games added");
             return "Found " + foundText + " in the folder" + addedText;
         }));
     }
 
-    /** every .3ds in a picked tree, a few levels down: a library of dumps, however it is laid out. */
+    /** every dump (.3ds, .cci, .cia, .cxi) in a picked tree, a few levels down: a library of dumps, however it is laid out. */
     private void findDumps(Uri tree, String parent, int depth, List<Document> found) {
         List<Document> here = children(tree, parent);
         for (Document document : here) {
-            if (!document.folder && document.name.toLowerCase(Locale.ROOT).endsWith(".3ds")) {
+            if (!document.folder && Rom.isDump(document.name)) {
                 found.add(document);
             }
         }
@@ -2485,6 +2432,7 @@ public final class Launcher extends Activity {
                 }
             }
         } catch (IOException ignored) {
+            // no settings saved yet, the default holds
         }
         return fallback;
     }
@@ -2663,6 +2611,7 @@ public final class Launcher extends Activity {
         playShortcut(intent);
         // a build asked for while the launcher is already up
         buildShortcut(intent);
+        buildRequested(intent);
         viewed(intent);
         if (intent.getBooleanExtra("selftest", false)) {
             selftest();

@@ -65,9 +65,12 @@ fn android_main(app: AndroidApp) {
     if bool_extra(&app, "prewarm") {
         std::env::set_var("ZAKURO_PREWARM", "1");
     }
-    std::panic::set_hook(Box::new(|info| {
+    // the game's own folder, not the working directory: set_up changes into
+    // the game's folder, but a panic before or without that still lands here
+    let panic_file = data.join("panic.txt");
+    std::panic::set_hook(Box::new(move |info| {
         log::error!("{info}");
-        let _ = std::fs::write("data/panic.txt", info.to_string());
+        let _ = std::fs::write(&panic_file, info.to_string());
     }));
 
     // the screens can only go up once the activity has its window
@@ -208,7 +211,9 @@ fn set_up_driver(own: &Path) {
 }
 
 fn set_up(own: &Path, folder: &Path, data: &Path) {
-    let _ = std::env::set_current_dir(folder);
+    if let Err(error) = std::env::set_current_dir(folder) {
+        log::warn!("could not change into {}, {error}", folder.display());
+    }
     std::env::set_var("POCKET_NATIVE_LOG", data.join("log.txt"));
     std::env::set_var("ZAKURO_FAST", "1");
     std::env::set_var("ZAKURO_DATA", data);

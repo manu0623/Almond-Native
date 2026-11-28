@@ -5,8 +5,8 @@
 # arm64. Out is what make_apk.sh takes as its optional jni dir, its assets
 # beside it:
 #
-#   <out>/jni/arm64-v8a/*.so        coped into lib/arm64-v8a
-#   <out>/assets/toolchain.zip      coped into the APK's assets
+#   <out>/jni/arm64-v8a/*.so        copied into lib/arm64-v8a
+#   <out>/assets/toolchain.zip      copied into the APK's assets
 #
 # ccwrap is built here rather than unpacked: it is the app's own C wrapper,
 # and it must be a PIE executable like the compilers beside it, not a library.

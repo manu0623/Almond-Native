@@ -1,5 +1,10 @@
 # Trying a game
 
+> This page comes from Pocket Native and describes its PC kit and Linux
+> handheld tools (`scripts/build.sh`, `--probe`), which are still in this
+> repository. In the Almond Native app, a game without a profile is built
+> and played the same way as any other, see [Start here](../START_HERE.md).
+
 Pocket Native runs any 3DS game Zakuro can boot, and nothing in it is
 specific to one game: a game without a profile simply runs without one.
 What's known about each game is on the

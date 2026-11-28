@@ -4,6 +4,7 @@ import android.app.NativeActivity;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
@@ -36,10 +37,26 @@ public final class Game extends NativeActivity {
         // rather than start another over it
         try (FileOutputStream out = new FileOutputStream(new File(getFilesDir(), "playing"))) {
             out.write(String.valueOf(getIntent().getStringExtra("game")).getBytes(StandardCharsets.UTF_8));
-        } catch (IOException ignored) {
+        } catch (IOException error) {
+            // the launcher then starts the game again rather than bringing this one back
+            Log.w("AlmondGame", "could not note which game is playing", error);
         }
         super.onCreate(state);
         hideBars();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // nothing yet on the first start: the engine shows the screen once it runs
+        SecondScreen.reshow();
+    }
+
+    @Override
+    protected void onStop() {
+        // Home, or another app over the game: the bottom display is theirs again
+        SecondScreen.hide();
+        super.onStop();
     }
 
     @Override

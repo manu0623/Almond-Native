@@ -13,8 +13,8 @@ that it can build a game on the phone, split the way Android needs it.
                             lib/clang/21), the crt objects and the few libc
                             stubs the sysroot links against
 
-Only what a build was measured to need is taken (scripts/android/README.md in
-the app's own words): a prefix of 673 MB makes a 49 MB sysroot and about
+Only what a build was measured to need is taken (Toolchain.java says where
+each part goes in the app): a prefix of 673 MB makes a 49 MB sysroot and about
 190 MB of libraries, most of it libLLVM.
 """
 import os

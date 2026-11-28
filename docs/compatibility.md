@@ -4,9 +4,15 @@ What's known about each game so far. It's early days, so most entries
 come from a short run on a PC or from one tester's report, and a game
 that isn't listed hasn't been tried by anyone yet.
 
-Tried a game? Please [open an issue](https://github.com/whovian64/pocket-native/issues)
-whether it works or not, with your handheld, its system, the game's
-region and the Pocket Native version from the top of the menu.
+Most entries below come from Pocket Native, which Almond Native is a
+fork of, and were tried on Linux handhelds or with games built on a PC.
+Almond Native runs the same engine, so they're a good guide, but results
+on a phone can differ. Version numbers in the notes (0.2 to 0.6) are
+Pocket Native's.
+
+Tried a game in Almond Native? Please [open an issue](https://github.com/manu0623/Almond-Native/issues)
+whether it works or not, with your device, its Android version, the
+game's region and the Almond Native version from the top of the menu.
 
 ## How to read it
 

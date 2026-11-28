@@ -1,355 +1,154 @@
 # Start here
 
-Pocket Native doesn't come with games, and it doesn't play your game
-files directly. Your PC rebuilds each of your 3DS games into a program
-made for your device first. Then:
+Almond Native is an Android app that builds your 3DS games **on the phone
+itself** and then plays them. Games don't come with it, and it doesn't play
+your game files directly. The first time you add a game, the app recompiles
+its code into a program for your phone, using the compiler it carries. That
+takes a few minutes. After that the game starts like any other.
 
-- on a **Linux handheld** (R36S and similar) you copy what the PC made
-  onto the SD card
-- on **Android** you install the app and add what the PC made to it
+No PC is needed. If you already use Pocket Native's PC kit, the games it
+builds can still be added (see [Games built on a PC](#games-built-on-a-pc)).
 
-Essentially: get the kit, drop your games on `Build a game`, then copy
-the `Pocket Native` folder it makes to your handheld's card or add it in
-the Android app.
-
-Before you start, check [which games work](docs/compatibility.md),
-[which handhelds](README.md#handhelds) and
-[which systems](README.md#systems).
+Before you start, check [which games work](docs/compatibility.md).
 
 ## What you need
 
-- **A device:**
-  - a Linux handheld from the [list](README.md#handhelds), or
-  - an Android phone or handheld with Android 11 or newer, 64-bit (almost
-    any from the last few years)
-- **A PC** with Windows or Linux and an Intel or AMD processor: the
-  build doesn't run on ARM yet. It does the heavy work, your device
-  never builds anything.
-  - Windows: Docker Desktop or Podman Desktop. If neither is
-    installed, the build offers to install Docker Desktop for you.
-  - Linux: podman or Docker.
-  - Free space: a few GB for the build container, and two to three
-    times each game's size for each game you build.
-- **Your own games**, dumped from your own console: a `.3ds`/`.cci` or
-  a `.cia`, also compressed as `.zcci`/`.zcia`. An encrypted one needs
-  your console's `aes_keys.txt` too. Any region works.
+- **An Android phone or handheld** with Android 11 or newer, 64-bit (almost
+  any from the last few years).
+- **Free space:** about 1 GB for the app and its compiler, plus each game's
+  own size and a few hundred MB more for its build. The app checks there is
+  room before it copies a game.
+- **Your own games, dumped from your own console and decrypted:** a `.3ds`
+  or `.cci` cartridge image, a `.cia` or a `.cxi`. To decrypt a dump, use
+  GodMode9 on your console (**Decrypt file**). The app tells you when a file
+  is encrypted, an update or DLC rather than a game, or cut short.
 
-## 1. Get the kit
+## 1. Install the app
 
-Open the [latest release](https://github.com/whovian64/pocket-native/releases/latest),
-download **Source code (zip)** under Assets, and unzip it somewhere.
-The folder you get is the kit: everything below happens in it. You only
-do this once, later versions come in through the updater.
+Download the `.apk` under Assets on the
+[latest release](https://github.com/manu0623/Almond-Native/releases/latest)
+onto the device and open it. The first time, Android asks you to allow
+installing apps from your browser or file manager.
 
-## 2. Build your games
+Uninstalling the app deletes the games and saves it holds, because Android
+removes an app's folder along with it. To update, install a newer `.apk` over
+the old one, or use **Update** in the app.
 
-This step is the same for every device.
+## 2. Add and build a game
 
-**Windows:** start Docker Desktop (or Podman Desktop) and let it finish
-starting. Then drag your games onto `Build a game.bat`, or double-click
-it and pick them.
+Tap **Add game**, then either:
 
-**Linux:** drag your games onto `Build a game`, or open it and pick
-them.
+- **Build it on this device:** pick one dump. The app copies it into its
+  own folder, works out which game it is, and builds it.
+- **A games folder on this device:** pick the folder you keep your dumps in.
+  Every dump in it (and up to four folders down) is listed as **Build
+  needed**, and you build each one from its page. **Scan now** on the Device
+  page finds dumps you add later.
 
-Several games can go at once. A `.cia` or an encrypted `.3ds` needs your
-console's `aes_keys.txt`: put it next to the game or in the kit's folder
-and the build finds it, otherwise it asks for a `.cia`.
+A build runs in the background with a notification, so you can leave the app
+while it works. It goes through these steps:
 
-**Precache shaders**, a box in the kit's window (`--precache` or
-`-Precache` in a terminal), works out from a game's files the shaders its
-3D models need, and the handheld builds them the first time the game
-starts instead of while you play. That first start takes longer, several
-minutes on a Mali-G31 device like the R36S, and B skips the rest. It reads
-the 3D models of games made with Nintendo's own formats (NintendoWare and
-the SDK's H3D: Mario Kart 7, Super Mario 3D Land, Animal Crossing, the
-Pokémon X/Y and Omega Ruby/Alpha Sapphire games, Kirby, A Link Between
-Worlds and many more), and games the kit has a shader list for. Menus,
-text, effects and other games' shaders are built the first time they're
-drawn, as before.
+1. copying the game,
+2. collecting the shaders the game's 3D models need, so they can be built
+   before you play instead of during,
+3. recompiling the game's code into C and compiling it (most of the time),
+4. installing it.
 
-**Share your shaders.** Each game keeps a list of the shaders it built on
-your handheld. Copy the card's `Pocket Native` folder back into the kit's
-build folder and run Rebuild all games with Precache shaders ticked: the
-kit builds those shaders in too, and writes `Pocket Native/shaders to
-share/<title id>.txt`. That file holds only GPU settings, no game data.
-Send it to us (a GitHub issue or the Discord) and it goes into the kit, so
-everyone's first start of that game has them, and other games' too where
-they use the same shaders.
+When it's done, the game's page opens. If a build fails, the message says
+why, and the full log is in
+`Android/data/io.github.almondnative/files/build-log.txt`.
 
-A window shows the build as it goes and stays open at the end so you
-can read how it went. The very first build sets up the build container,
-which downloads a few hundred MB and takes a while. After that, each
-game takes a few minutes, most of it recompiling the game's code.
+## 3. Play
 
-When it's done, the kit's `build` folder holds a `Pocket Native` folder
-with your games in it. Building more games later adds them to the same
-folder.
-
-Prefer a terminal? In the kit's folder:
-
-```bash
-scripts/build.sh path/to/game.3ds path/to/other.cia --keys path/to/aes_keys.txt
-```
-
-or on Windows, in PowerShell, with your own files' paths:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build.ps1 C:\path\to\game.3ds -Keys C:\path\to\aes_keys.txt
-```
-
-## 3. Put the games on your device
-
-### On a Linux handheld
-
-Put the handheld's SD card in your PC and copy the **whole**
-`Pocket Native` folder from `build` into the folder your system keeps
-ports in:
-
-| System | Where it goes |
-|---|---|
-| ArkOS, ArkOS4Clones, dArkOS, dArkOSRE | `roms/ports`, or `roms2/ports` with two cards |
-| Knulli | `roms/ports` on the SHARE partition |
-| muOS | `ROMS/Ports` |
-| ROCKNIX | `roms/ports` on the GAMES partition (`/storage/roms/ports`) |
-
-On ArkOS it ends up like this:
-
-```
-roms/ports/Pocket Native/Pokémon Omega Ruby.sh
-roms/ports/Pocket Native/pocket-native/
-```
-
-The `.sh` files are the launchers, one per game, and `pocket-native`
-holds the program and the games. They only work together, so copy the
-folder as it is: don't rename anything or move files between the two.
-
-Put the card back, restart the handheld's frontend (EmulationStation on
-ArkOS), and your games are under Ports.
-
-### On Android
-
-1. **Install the app.** Download the `.apk` under Assets on the
-   [latest release](https://github.com/whovian64/pocket-native/releases/latest)
-   onto the device and open it. The first time, Android asks you to
-   allow installing apps from your browser or file manager.
-2. **Copy your games over.** Copy the `Pocket Native` folder from the
-   kit's `build` folder onto the device, for example into `Download`
-   over USB.
-3. **Add them in the app.** Tap **Add game**, pick **A folder the kit
-   built**, choose that `Pocket Native` folder, tap **Use this folder**
-   and **Allow**. The app adds every game it finds in there, so one go
-   does them all.
-
-The app keeps its own copy of each game, so you can delete the one in
-`Download` afterwards.
-
-Uninstalling the app deletes the games and saves it holds, Android
-removes an app's folder along with it. To update, install a newer
-`.apk` over the old one instead.
-
-## 4. Play
-
-**The first start of each game is slow.** It builds the GPU programs
-the game needs, which can take a few minutes with a black screen or a
-stuttering title screen. Let it run. The next start reuses them, and
-any that were still missing get built as you play.
-
-### On a Linux handheld
-
-The buttons you need right away:
-
-- **A tap of FN** opens the menu and pauses the game. No FN button? Press
-  **L3 and R2** together.
-- **FN + Start** quits (**L3 + Start** without FN).
-- The **right stick** moves a cursor over the bottom screen, **R2**
-  touches it.
-
-The full list of controls is in the [README](README.md#controls).
-
-### On Android
-
-Tap a game to play it. Touch controls cover everything, and a gamepad
-works too: the touch controls hide while you use one and come back when
-you touch the screen.
+Tap a game to play it. Touch controls cover everything, and a gamepad works
+too: the touch controls hide while you use one and come back when you touch
+the screen.
 
 - The on-screen **Menu** button, or **Back**, opens the menu.
-- **Controls > Edit touch controls** in the menu lets you drag the
-  buttons and sticks where you want them and make them bigger or
-  smaller, separately for holding the device upright and sideways.
+- **Controls > Edit touch controls** in the menu lets you drag the buttons
+  and sticks where you want them and make them bigger or smaller, separately
+  for holding the device upright and sideways.
 - **Device**, at the top right of the app, sets the orientation, touch
-  controls, aspect ratio, resolution and smooth scaling for every game,
-  and on a handheld with two screens (AYN Thor, RG DS) whether the
-  bottom screen goes on the second one.
-- Long-press a game to put it on your home screen, with launchers that
-  take shortcuts.
+  controls, aspect ratio, resolution and smooth scaling for every game, and
+  on a handheld with two screens (AYN Thor, RG DS) whether the bottom screen
+  goes on the second one.
+- Long-press a game to put it on your home screen, with launchers that take
+  shortcuts, or to start it with its menu open.
+
+**The first start of each game is slower.** It builds the GPU programs
+(shaders) the game needs before it starts. The next start reuses them. A
+shader first used mid-play is built then, and what it draws can flicker in
+for a moment.
+
+**Quit from the menu** rather than force-stopping the app. That way the app
+learns which shaders that run used, and the next start builds them before
+the game wants them. On a game's page:
+
+- **Rebuild shaders** clears the stored copies and builds every shader the
+  game is known to use, then says how many it built.
+- **Remove shaders** forgets what was learned, for a fresh first start.
 
 ### The menu
 
-The menu has a line of help for each setting at the bottom. The ones
-worth knowing first:
+The menu has a line of help for each setting at the bottom. The ones worth
+knowing first:
 
-- **Performance > Frame cap:** 30 fps by default, which is what most
-  3DS games run at. 60 is there for the games made for 60.
-- **Display > Layout:** both screens, one big screen, side by side and
-  more. FN + R1 switches between both screens and one big one in game
-  on a Linux handheld.
+- **Performance > Frame cap:** 30 fps by default, which is what most 3DS
+  games run at. 60 is there for the games made for 60.
+- **Display > Layout:** both screens, one big screen, side by side and more.
 - **This game:** options for that game, where it has any.
-- **Advanced settings > Most compatible:** for a game that crashes or
-  looks wrong, then **Restart game**. If that fixes it, the setting
-  that broke it is one of the ones it turned off.
-
-## Updating
-
-When a new version is out, the build tells you when it finishes. Open
-`Update Pocket Native` in the kit's folder (`Update Pocket Native.bat`
-on Windows): it downloads the new version into the kit, builds every
-game in `build` again from the copies the last build kept, so you
-don't need your game files for it, and keeps the old files in `.old`.
-
-Then:
-
-- **Linux handheld:** copy the `Pocket Native` folder onto the card
-  again, over the old one.
-- **Android:** install the new `.apk` from the release, then add the
-  rebuilt `Pocket Native` folder in the app again. A game added again
-  keeps its saves and settings.
+- **Advanced settings > Most compatible:** for a game that crashes or looks
+  wrong, then **Restart game**. If that fixes it, the setting that broke it
+  is one of the ones it turned off.
 
 The menu shows which version you're running, at the top.
 
-A game that ran parts of itself slowly, interpreted, writes down where in
-`title.hints` beside it on the card. Copy the `Pocket Native` folder from
-the card back over the one in the kit's `build` folder, then open `Rebuild
-all games` (`Rebuild all games.bat` on Windows), and the build makes those
-parts run at full speed too. Copy the folder onto the card again after.
+## A different GPU driver (advanced)
 
-On Android the app keeps `title.hints` in the game's own folder,
-`Android/data/io.github.almondnative/files/games/<title id>/` on the card (or
-on the phone's storage without one). Copy it into the same game's folder in
-the kit, `build/Pocket Native/pocket-native/games/<title id>/`, then
-`Rebuild all games` and add the rebuilt game in the app again: its saves,
-settings and hints stay.
+On a phone with an Adreno GPU, the app can draw with Mesa's Zink on Turnip
+instead of the phone's own driver. Name the libraries in
+`files/config/driver.txt` in the app's own storage. When that file names
+none, or they won't load, the phone's own driver is used.
+
+## Games built on a PC
+
+Pocket Native's PC kit (in `kit/` and `scripts/`, see
+[the upstream guide](https://github.com/whovian64/pocket-native/blob/main/START_HERE.md))
+builds games in a container on Windows or Linux, and also handles encrypted
+dumps with your console's `aes_keys.txt`. Copy the folder it makes onto the
+device, then in the app tap **Add game > A games folder on this device**
+and pick it. Built games in that folder are added as they are.
 
 ## If something goes wrong
 
-**Windows says it protected your PC, or asks whether to run the file.**
-It does that for anything from the internet. Click **More info**, then
-**Run anyway**.
+**"That file is not a game this app can build: the dump is encrypted".**
+Decrypt it on your console with GodMode9 (**Decrypt file**), or build it
+with the PC kit and your `aes_keys.txt`.
 
-**Nothing happens when you open `Build a game` on Linux.** The file
-manager doesn't run launchers it doesn't trust yet. Allow it when it
-asks, or in the file's properties, or run `scripts/build.sh` from a
-terminal.
+**"There is not enough free space for this game".** Free some space, or put
+in a memory card: the app keeps games on the storage with the most room.
 
-**PowerShell says `build.ps1` is not digitally signed.** PowerShell
-won't run scripts from the internet when started straight from it. Use
-`Build a game.bat`, or start the script with `-ExecutionPolicy Bypass`
-as above.
+**The build stops partway.** Look at the end of `build-log.txt` (path
+above). Android may stop a long build on a phone low on memory. Close other
+apps and build again.
 
-**The Windows build can't reach Docker.** Docker Desktop isn't running.
-Start it, wait until it says it's running, and build again.
+**A black screen for minutes on the first start.** Usually that's the
+shaders being built, see step 3. If it never comes up, look in the game's
+`data/log.txt`, in
+`Android/data/io.github.almondnative/files/games/<title id>/`.
 
-**Miis have no heads, or heads with no faces (experimental).** Mii heads
-are drawn from the console's Mii parts, which are Nintendo's and can't come
-with Pocket Native. The build gets them and copies them into every game it
-builds:
-- with your console's full `aes_keys.txt` in the kit's folder (one with the
-  `slot0x3DKeyX` and `common0` lines), it downloads them from Nintendo's
-  update servers and opens them with your keys, as a 3DS gets its system
-  data;
-- a `CFL_Res.dat` from your own console, or the `00000000.app.romfs` Citra
-  and Azahar keep them in (`nand/.../title/0004009b/00010202/content/`), put
-  in the kit's folder, works too, as does a game you build that carries
-  them (Animal Crossing: New Leaf does).
+**A game crashes, freezes or looks wrong.** Try **Advanced settings > Most
+compatible** and **Restart game** first. The
+[compatibility list](docs/compatibility.md) says what's known for each game.
 
-Without them, Miis get an open-source placeholder head with no face. After
-adding them, run `Rebuild all games` and copy the folder onto the card again.
-This is experimental and may not work in every game. The game's log says
-which head it used, so if your Miis look wrong, please send it.
-
-**The build says the game is encrypted.** Put your console's
-`aes_keys.txt` next to the game or in the kit's folder and build again,
-or decrypt the dump first (GodMode9: Decrypt file). An eShop game's
-`.cia` is encrypted with its title key too: that needs the full
-`aes_keys.txt`, with the `slot0x3DKeyX` and `common0` lines.
-
-**The build stops with `KeyError: 'generator'` or another key's name,
-or says your aes_keys.txt has no line for one.** Your aes_keys.txt is
-missing keys. It needs a `generator=` line and a `slot0x2CKeyX=` line,
-and newer games need `slot0x25KeyX`, `slot0x18KeyX` or `slot0x1BKeyX`
-too. Dump it from your console again, or decrypt the game first
-(GodMode9: Decrypt file) and build it without keys.
-
-**The build stops with "Killed" (`Killed signal terminated program
-cc1`).** The PC, or Docker's share of it, ran out of memory while
-compiling. Each compiler takes about a gigabyte: the build starts only
-as many at once as memory has room for, and when one runs out anyway it
-goes again with fewer at once, so a "Killed" line on its own is fine. If
-the build stops even so, close other programs, or give Docker Desktop
-more memory in Settings > Resources, and build again.
-
-**The update can't reach GitHub.** Check the PC's connection and try
-again, or get the new kit by hand as in step 1.
-
-**The game isn't under Ports.** The folder is in the wrong place, or
-the frontend hasn't been restarted. The whole `Pocket Native` folder
-goes inside the ports folder. If it still doesn't show, your system may
-only list launchers sitting directly in the ports folder. On ArkOS
-that's EmulationStation's **Scan Ports folder on boot** (Start > UI
-Settings), which is off by default: turn it on. Or move the `.sh` files
-and the `pocket-native` folder out of `Pocket Native`, side by side
-into the ports folder itself.
-
-**The game is listed but won't start.** The folder arrived in pieces.
-Delete it from the card and copy the whole folder again.
-
-**The Android app says there's no game there.** Pick the `Pocket
-Native` folder the kit made, the one with `pocket-native` inside.
-Games built with a kit from 0.3.0 or before don't load on Android:
-update the kit and build them again.
-
-**A black screen for minutes on the first start.** Usually the GPU
-programs being built, see step 4. If it never comes up, look in the
-game's `log.txt`. On a Linux handheld, a line with
-`could not initialize EGL` means the GPU didn't start for Pocket
-Native, please report it.
-
-**A game crashes, freezes or looks wrong.** Try **Advanced settings >
-Most compatible** and **Restart game** first. The
-[compatibility list](docs/compatibility.md) says what's known for each
-game.
-
-**A game that ran well is slow now.** An advanced setting may have been
-changed: **Generic lighting** On, for one, makes Pokémon Sun and Moon
-run at a fifth of their speed on an R36S. **Reset to defaults** at the
-bottom of **Advanced settings**, then **Restart game**.
-
-**A game crashes while its shaders build, with `gles-compiler` in
-`log.txt`.** That's the GPU driver's own shader compiler crashing, as
-the RX6H's does on some games. From 0.5.0 the log names the shader and
-the next start leaves it out, so start the game again. Please send
-that first log, it shows what the driver can't take.
+**A game crashes and leaves a `panic.txt`.** It's in the game's `data/`
+folder. Please send it with your report.
 
 ## Reporting a problem
 
-Open an [issue](https://github.com/whovian64/pocket-native/issues) and
-say:
+Open an [issue](https://github.com/manu0623/Almond-Native/issues) and say:
 
-- the device and the system on it (ArkOS, Knulli, muOS, Android ...)
+- the device and its Android version
 - the game, and which region
-- the Pocket Native version, from the top of the menu
-- what happened, and where in the game
-
-and attach the game's `log.txt`:
-
-- **Linux handheld:** `Pocket Native/pocket-native/games/<title id>/data/log.txt`
-  on the card
-- **Android:** `Android/data/io.github.almondnative/files/games/<title id>/data/log.txt`.
-  Plug the device into a PC to get at it, many file managers can't
-  open `Android/data`.
-
-Copy it off right after the problem, the next start of that game
-replaces it.
-
-A game that works is worth an issue too, it goes on the
-[compatibility list](docs/compatibility.md).
+- the Almond Native version, from the top of the menu
+- the game's `data/log.txt`, and `build-log.txt` if the build failed

@@ -5,9 +5,11 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Environment;
 import android.os.IBinder;
+import android.provider.OpenableColumns;
 import android.util.Log;
 import java.io.BufferedReader;
 import java.io.File;
@@ -104,7 +106,8 @@ public final class BuildService extends Service {
                 // where the launcher's dialog reads it, before a start is let through
                 try (FileOutputStream out = new FileOutputStream(new File(getFilesDir(), SHADERS_RESULT))) {
                     out.write((built ? "ready" : "failed").getBytes(StandardCharsets.UTF_8));
-                } catch (IOException ignored) {
+                } catch (IOException error) {
+                    Log.w(TAG, "could not write " + SHADERS_RESULT + ", the launcher will not say how it went", error);
                 }
                 preparing = false;
                 // a card that did its work silently looks like one that did nothing
@@ -131,7 +134,8 @@ public final class BuildService extends Service {
             // Android shows none at all until the permission is given
             try (FileOutputStream out = new FileOutputStream(new File(getFilesDir(), "build-result.txt"))) {
                 out.write(result.getBytes(StandardCharsets.UTF_8));
-            } catch (IOException ignored) {
+            } catch (IOException error) {
+                Log.w(TAG, "could not write build-result.txt, the launcher will not say how it went", error);
             }
             getSystemService(NotificationManager.class).notify(NOTIFICATION, shown(result, 100));
             stopForeground(false);
@@ -156,27 +160,43 @@ public final class BuildService extends Service {
         // beside the games, where adb can read it: a build that failed is
         // looked at with "adb shell cat .../files/build-log.txt"
         File log = new File(getExternalFilesDir(null), "build-log.txt");
+        File games = new File(gamesVolume(), "games");
+        games.mkdirs();
+        // a game is up to 4 GB, and a copy that runs out of room halfway
+        // leaves a dump that reads as cut short
+        long size = size(uri);
+        if (size > 0 && games.getUsableSpace() < size + FREE_MARGIN) {
+            throw new IOException("there is not enough free space for this game: it needs "
+                    + megabytes(size + FREE_MARGIN) + " MB and the storage has " + megabytes(games.getUsableSpace()) + " MB");
+        }
+        // copied under a name of its own first: which game it is, and whether
+        // it can be read at all, is only known once the recompiler has looked
+        File incoming = new File(games, ".incoming-" + System.currentTimeMillis() + ".rom");
         String id, name;
         File folder, rom;
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
-            if (in == null) {
-                throw new IOException("could not open that file");
+        try {
+            try (InputStream in = getContentResolver().openInputStream(uri)) {
+                if (in == null) {
+                    throw new IOException("could not open that file");
+                }
+                say(10, "copying the game");
+                try (OutputStream out = new FileOutputStream(incoming)) {
+                    copy(in, out, 10, 26);
+                }
             }
-            byte[] header = read(in, 0x110);
-            id = titleId(header);
+            // a .3ds, a .cia or a .cxi, decrypted: the recompiler tells them
+            // apart and says what is wrong with one it cannot read
+            id = identify(incoming);
             name = name(id);
-            // beside the games the kit's folders hold, where the launcher looks
-            folder = new File(new File(gamesVolume(), "games"), id);
+            folder = new File(games, id);
             folder.mkdirs();
             rom = new File(folder, "game.3ds");
-            say(10, "copying " + name);
-            try (OutputStream out = new FileOutputStream(rom)) {
-                // the header came off this stream already: without it back the
-                // copy starts 0x110 bytes in, and a good cartridge reads as
-                // neither a .3ds nor anything else
-                out.write(header);
-                copy(in, out, 10, 26);
+            rom.delete();
+            if (!incoming.renameTo(rom)) {
+                throw new IOException("could not move the game into " + folder);
             }
+        } finally {
+            incoming.delete();
         }
 
         // the font the kit puts beside every game it builds, so that a title
@@ -298,13 +318,22 @@ public final class BuildService extends Service {
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.redirectErrorStream(true);
         Toolchain.applyTo(builder, this);
-        try (BufferedReader lines = new BufferedReader(new InputStreamReader(builder.start().getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = lines.readLine()) != null) {
-                Log.i(TAG, what + ": " + line);
+        try {
+            Process process = builder.start();
+            try (BufferedReader lines = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = lines.readLine()) != null) {
+                    Log.i(TAG, what + ": " + line);
+                }
+            }
+            int status = process.waitFor();
+            if (status != 0) {
+                Log.w(TAG, what + " stopped with " + status + ", the shaders get built as the game needs them");
             }
         } catch (IOException error) {
             Log.w(TAG, what + " did not finish, the shaders get built as the game needs them", error);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -376,16 +405,50 @@ public final class BuildService extends Service {
         return id;
     }
 
-    /** the title id in a decrypted .3ds's header, as 16 hex digits */
-    private static String titleId(byte[] header) throws IOException {
-        if (header[0x100] != 'N' || header[0x101] != 'C' || header[0x102] != 'S' || header[0x103] != 'D') {
-            throw new IOException("that file is not a decrypted .3ds: its header is not NCSD");
+    /** room left over beside a game, for its saves, shaders and log */
+    private static final long FREE_MARGIN = 256L << 20;
+
+    private static long megabytes(long bytes) {
+        return bytes >> 20;
+    }
+
+    /** the file's size, as its provider tells it, or -1 when it does not */
+    private long size(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri, new String[] {OpenableColumns.SIZE}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) {
+                return cursor.getLong(0);
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "could not ask how big " + uri + " is", error);
         }
-        long id = 0;
-        for (int i = 7; i >= 0; i--) {
-            id = (id << 8) | (header[0x108 + i] & 0xFFL);
+        return -1;
+    }
+
+    /**
+     * the program id a dump's library is named after, from 3dsrecomp id: it
+     * reads a cartridge image, a .cia and a bare .cxi, and refuses an
+     * encrypted or a cut short one with a message that says so
+     */
+    private String identify(File rom) throws IOException, InterruptedException {
+        ProcessBuilder builder = new ProcessBuilder(Toolchain.recompiler(this).getAbsolutePath(), "id", rom.getAbsolutePath());
+        builder.redirectErrorStream(true);
+        Toolchain.applyTo(builder, this);
+        Process process = builder.start();
+        StringBuilder said = new StringBuilder();
+        try (BufferedReader lines = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = lines.readLine()) != null) {
+                said.append(line.trim()).append('\n');
+            }
         }
-        return String.format("%016X", id);
+        String output = said.toString().trim();
+        if (process.waitFor() != 0) {
+            throw new IOException("that file is not a game this app can build: " + output);
+        }
+        if (!output.matches("[0-9A-F]{16}")) {
+            throw new IOException("the recompiler did not name the game: " + output);
+        }
+        return output;
     }
 
     // ---- reading, writing and saying how it goes
@@ -396,7 +459,7 @@ public final class BuildService extends Service {
         while (at < count) {
             int read = in.read(bytes, at, count - at);
             if (read < 0) {
-                throw new IOException("that file is shorter than a game's header");
+                throw new IOException("that file ended before it should have");
             }
             at += read;
         }

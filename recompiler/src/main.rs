@@ -18,7 +18,8 @@ use recomp3ds::{compile, port};
 use recomp3ds::{abi, codegen, image, imported, module_files, static_module, verify};
 
 const USAGE: &str = "\
-usage, 3dsrecomp analyze <rom>
+usage, 3dsrecomp id <rom>
+       3dsrecomp analyze <rom>
        3dsrecomp build <rom> [<dir>] [--overrides <file or dir>]
        3dsrecomp port <rom> <dir> [--overrides <file or dir>] [--name <name>] [--zakuro <checkout>]
        3dsrecomp verify <rom> <library> [count]
@@ -31,7 +32,8 @@ the title's models need, those its title list holds and those of other
 titles' lists for shaders it has too, for the engine to build before the
 game starts. learn adds the shaders a run
 used, from its shaders.txt and the vertex programs kept beside it, to a
-title list, which holds no game data.";
+title list, which holds no game data. id prints the program id a library
+for the title is named after, or says why the dump cannot be read.";
 
 /// what the options on the command line ask for.
 #[derive(Default)]
@@ -67,6 +69,7 @@ fn main() {
         }
     }
     match words.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        ["id", rom] => id(rom),
         ["analyze", rom] => analyze(rom),
         ["build", rom] => build(rom, None, &options),
         ["build", rom, dir] => build(rom, Some(Path::new(dir)), &options),
@@ -87,6 +90,20 @@ fn main() {
         _ => {
             eprintln!("{USAGE}");
             exit(2);
+        }
+    }
+}
+
+/// the program id, as the 16 hex digits a library and a game's folder are
+/// named after. An app that has to know which game a file is before it builds
+/// it asks this rather than reading headers itself: a .cia, a .cxi, an
+/// encrypted or a cut short dump are all told apart here.
+fn id(path: &str) {
+    match Title::load(path) {
+        Ok(title) => println!("{:016X}", title.program_id()),
+        Err(error) => {
+            eprintln!("{error}");
+            exit(1);
         }
     }
 }
