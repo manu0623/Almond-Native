@@ -2,16 +2,14 @@
 
 # Almond Native
 
-Almond Native is the Android companion for Arcoon Launcher: it builds 3DS games
-on the device itself, with no Windows PC in the way.
+Almond Native an Android companion for Arcoon Launcher: it builds 3DS games
+on the device itself.
 
-It is a fork of [Pocket Native](https://github.com/whovian64/pocket-native),
-inspired by Peanuts Native, and it keeps Pocket Native's engine, recompiler and
-per-game profiles.
+Almond Native is a fork of [Pocket Native](https://github.com/whovian64/pocket-native),
+inspired by Peanuts Native, created and tested for Ayn Thor. t keeps Pocket Native's engine.
 
 A game dumped into the app's games folder is compiled on the phone by the
-toolchain the APK carries - compiler, linker and libraries included - so the
-build Arcoon Launcher starts comes out of the device, not a PC.
+toolchain the APK carries - compiler, linker and libraries included. 
 
 No games are included: it works only with games dumped from your own console.
 
