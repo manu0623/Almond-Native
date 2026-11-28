@@ -78,11 +78,15 @@ for _ in $(seq 1 30); do
     sleep 1
 done
 [ $started = 1 ] || fail "the build never started"
-for _ in $(seq 1 180); do
-    on_device dumpsys activity services "$pkg/.BuildService" | grep ServiceRecord >/dev/null || break
-    sleep 5
+# a small homebrew takes about a quarter of an hour on an AYN Thor: most of it
+# is the phone's clang compiling the recompiled code
+began=$(date +%s)
+while on_device dumpsys activity services "$pkg/.BuildService" | grep ServiceRecord >/dev/null; do
+    minutes=$(( ($(date +%s) - began) / 60 ))
+    [ $minutes -lt 40 ] || fail "the build was still running after 40 minutes"
+    sleep 60
+    echo "   building... $(( ($(date +%s) - began) / 60 )) min"
 done
-on_device dumpsys activity services "$pkg/.BuildService" | grep ServiceRecord >/dev/null && fail "the build was still running after 15 minutes"
 
 # the launcher reads the result back when it next shows, and logs it
 on_device am start -W -n "$pkg/.Launcher" >/dev/null

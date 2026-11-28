@@ -52,7 +52,7 @@ With `--dry-run` it stops after step 5, and nothing leaves your computer.
 | Packed on-device compiler | `packed-toolchain/` in this folder | Not in git (about 230 MB). See below. |
 | Docker or Podman | | The first build makes the build container (about 1 GB). |
 | A handheld over adb | | For step 5. `--no-device` skips it, but then the release was never tried on a device. |
-| A small dump to test with | `~/.config/almond/smoke-test.cxi` | Any small homebrew .cxi or .3ds. Or pass `--dump`. |
+| A small dump to test with | `~/.config/almond/smoke-test.cxi` | Any small homebrew .cxi or .3ds. Or pass `--dump`. Building it on the device takes about 15 minutes on an AYN Thor. |
 
 `--device <serial>` picks the handheld when more than one is connected.
 
