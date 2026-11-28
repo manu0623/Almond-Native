@@ -25,14 +25,18 @@ ok() { echo "ok:   $*"; }
 IFS=. read -r major minor patch <<< "$version"
 code=$((major * 1000000 + minor * 1000 + patch))
 
-badging="$("$BUILD_TOOLS_BIN/aapt2" dump badging "$apk" | head -1)"
+# read whole, then cut: `| head` would close the pipe on aapt2, and pipefail
+# would take its SIGPIPE for a failure
+badging="$("$BUILD_TOOLS_BIN/aapt2" dump badging "$apk")"
+badging="${badging%%$'\n'*}"
 echo "$badging" | grep -q "name='io.github.almondnative'" || fail "package is not io.github.almondnative: $badging"
 echo "$badging" | grep -q "versionName='$version'" || fail "versionName is not $version: $badging"
 echo "$badging" | grep -q "versionCode='$code'" || fail "versionCode is not $code: $badging"
 ok "io.github.almondnative $version (version code $code)"
 
 want="$(tr -d '[:space:]' < "$cert_file")"
-have="$("$BUILD_TOOLS_BIN/apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)"
+certs="$("$BUILD_TOOLS_BIN/apksigner" verify --print-certs "$apk")"
+have="$(printf '%s\n' "$certs" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
 [ -n "$have" ] || fail "apksigner could not verify the signature"
 [ "$have" = "$want" ] || fail "signed with $have, the release certificate is $want"
 ok "signed with the release certificate"

@@ -41,7 +41,7 @@ adb=("$adb_bin")
 on_device() { "${adb[@]}" shell "$@" | tr -d '\r'; }
 
 echo "== installing $(basename "$apk") on $(on_device getprop ro.product.model)"
-"${adb[@]}" install -r "$apk" | tail -1 | grep -q Success || fail "install refused (a different signing key, or an older version than the one installed)"
+"${adb[@]}" install -r "$apk" | tail -1 | grep Success >/dev/null || fail "install refused (a different signing key, or an older version than the one installed)"
 installed="$(on_device dumpsys package "$pkg" | sed -n 's/^ *versionName=//p' | head -1)"
 [ -z "$version" ] || [ "$installed" = "$version" ] || fail "the device reports $installed, not $version"
 ok "installed, version $installed"
@@ -50,7 +50,7 @@ ok "installed, version $installed"
 on_device am start -W -n "$pkg/.Launcher" >/dev/null
 sleep 4
 on_device pidof "$pkg" >/dev/null || fail "the launcher is not running four seconds after it started"
-if "${adb[@]}" logcat -d | grep -E "FATAL EXCEPTION|AndroidRuntime" | grep -q "$pkg"; then
+if "${adb[@]}" logcat -d | grep -E "FATAL EXCEPTION|AndroidRuntime" | grep "$pkg" >/dev/null; then
     "${adb[@]}" logcat -d | grep -A15 "FATAL EXCEPTION" | head -30
     fail "the launcher crashed"
 fi
@@ -74,15 +74,15 @@ on_device am start -a "$pkg.BUILD" -n "$pkg/.Launcher" -d "file://$staged" >/dev
 # the build service runs while the build does; wait for it to start, then end
 started=0
 for _ in $(seq 1 30); do
-    on_device dumpsys activity services "$pkg/.BuildService" | grep -q ServiceRecord && { started=1; break; }
+    on_device dumpsys activity services "$pkg/.BuildService" | grep ServiceRecord >/dev/null && { started=1; break; }
     sleep 1
 done
 [ $started = 1 ] || fail "the build never started"
 for _ in $(seq 1 180); do
-    on_device dumpsys activity services "$pkg/.BuildService" | grep -q ServiceRecord || break
+    on_device dumpsys activity services "$pkg/.BuildService" | grep ServiceRecord >/dev/null || break
     sleep 5
 done
-on_device dumpsys activity services "$pkg/.BuildService" | grep -q ServiceRecord && fail "the build was still running after 15 minutes"
+on_device dumpsys activity services "$pkg/.BuildService" | grep ServiceRecord >/dev/null && fail "the build was still running after 15 minutes"
 
 # the launcher reads the result back when it next shows, and logs it
 on_device am start -W -n "$pkg/.Launcher" >/dev/null
@@ -99,9 +99,9 @@ id="$(echo "$result" | grep -oE '[0-9A-F]{16}' | head -1)"
 "${adb[@]}" logcat -c
 on_device am start -a "$pkg.PLAY" -n "$pkg/.Launcher" --es game "$files/games/$id" >/dev/null
 sleep 10
-"${adb[@]}" logcat -d | grep -q "Displayed $pkg/.Game" || fail "the built game did not open"
+"${adb[@]}" logcat -d | grep "Displayed $pkg/.Game" >/dev/null || fail "the built game did not open"
 on_device pidof "$pkg:game" >/dev/null || fail "the game was not running ten seconds after it opened"
-if "${adb[@]}" logcat -d | grep -E "FATAL EXCEPTION|panic" | grep -qi "almond"; then
+if "${adb[@]}" logcat -d | grep -E "FATAL EXCEPTION|panic" | grep -i "almond" >/dev/null; then
     fail "the game crashed"
 fi
 ok "the built game opens through PLAY and keeps running"
