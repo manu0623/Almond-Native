@@ -36,7 +36,7 @@ sed -e "s|@PACKAGE@|$package|" -e "s|@VERSION_CODE@|$code|" -e "s|@VERSION@|$ver
 "$BUILD_TOOLS_BIN/aapt2" link -o "$work/unaligned.apk" --manifest "$work/AndroidManifest.xml" -I "$ANDROID_JAR" -A "$assets" "$work/res.zip"
 mkdir -p "$work/classes" "$work/dex"
 mapfile -t sources < <(find "$here/java" -name '*.java')
-javac -nowarn --release 11 -classpath "$ANDROID_JAR" -d "$work/classes" "${sources[@]}"
+javac -nowarn -encoding UTF-8 --release 11 -classpath "$ANDROID_JAR" -d "$work/classes" "${sources[@]}"
 mapfile -t classes < <(find "$work/classes" -name '*.class')
 "$BUILD_TOOLS_BIN/d8" --min-api 30 --lib "$ANDROID_JAR" --output "$work/dex" "${classes[@]}"
 (cd "$work/dex" && zip -q "$work/unaligned.apk" classes.dex)
