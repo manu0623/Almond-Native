@@ -12,3 +12,5 @@ aes_keys.txt
 .DS_Store
 .old/
 .update/
+/packed-toolchain/
+__pycache__/
